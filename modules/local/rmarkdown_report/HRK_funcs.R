@@ -370,14 +370,15 @@ generate_kegg_enrichment_plot <- function(gene_lists, de_results_df, universe_en
     if (nrow(term_matrix) > 1) {
       term_dist <- dist(term_matrix, method = "binary")  
       term_hclust <- hclust(term_dist, method = "ward.D2")  
-      term_order <- rownames(term_matrix)[term_hclust$order]
+      term_order <- unique(rownames(term_matrix)[term_hclust$order])
     } else {
-      term_order <- df$Description  
+      term_order <- unique(df$Description)  # <--- this was the bug
     }
     
     df$Description <- factor(df$Description, levels = term_order)  
     return(df)
   }
+  
   
   kegg_res@compareClusterResult <- reorder_KEGG_terms(kegg_res@compareClusterResult)
   
@@ -777,7 +778,7 @@ library(car)
 plot_pca <- function(dge, title, grp_var=report_params$group_var, show_legend = TRUE, combine_plots = FALSE) {
   # Extract log-transformed CPM values
   PCA_DATA <- t(get_log_matrix(dge))
-  
+  rownames(PCA_DATA) <- dge$samples$sample_id
   numsonly <- as.data.frame(PCA_DATA)
   numsonly <- as.data.frame(lapply(numsonly, as.numeric))  # Ensure numeric values
   
@@ -785,7 +786,7 @@ plot_pca <- function(dge, title, grp_var=report_params$group_var, show_legend = 
   pca_res <- prcomp(numsonly, center = TRUE, scale. = FALSE, rank. = 2)
   scores <- pca_res$x
   
-  # Extract group information (batch or treatment)
+  # Extract group information
   group_labels <- dge$samples[[grp_var]]  
   colors <- RColorBrewer::brewer.pal(length(unique(group_labels)), "Set1")
   
