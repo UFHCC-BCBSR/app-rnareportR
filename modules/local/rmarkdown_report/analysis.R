@@ -51,18 +51,34 @@ files.list <- list.files(path = report_params$rsem_dir, pattern = 'genes.results
 file_sample_names <- gsub(".genes.results$", "", basename(files.list))
 
 # Step 3: Create data frame mapping sample names to files
-file_df <- data.frame(SampleName = file_sample_names, File = files.list, stringsAsFactors = FALSE)
+file_df_raw <- data.frame(SampleName = file_sample_names, File = files.list, stringsAsFactors = FALSE)
 
 # Step 4: Load sample keys
-sample.keys <- read_csv(report_params$sample_data)
+sample.keys <- read.csv(report_params$sample_data)
+colnames(sample.keys)[1] <- "SampleName"
 
-# Step 5: Filter and re-order file_df to match sample.keys
-file_df$SampleName <- gsub("_S\\d+_L\\d+_quant$", "", file_df$SampleName)
-file_df <- file_df[file_df$SampleName %in% sample.keys$SampleName, ]
-file_df <- file_df[match(sample.keys$SampleName, file_df$SampleName), ]  # ensures correct order
+# Step 5: Flexible matching - find one matching file per sample
+matched_files <- character(nrow(sample.keys))
+matched_names <- character(nrow(sample.keys))
+
+for (i in seq_along(sample.keys$samples)) {
+  sample_name <- sample.keys$samples[i]
+  matches <- grep(sample_name, file_sample_names, value = TRUE)
+  
+  if (length(matches) == 0) {
+    stop(paste0("No file matched sample name: ", sample_name))
+  } else if (length(matches) > 1) {
+    stop(paste0("Multiple files matched sample name: ", sample_name, "\nMatches: ", paste(matches, collapse = ", ")))
+  } else {
+    matched_names[i] <- matches
+    matched_files[i] <- files.list[which(file_sample_names == matches)]
+  }
+}
+
+file_df <- data.frame(SampleName = sample.keys$samples, File = matched_files, stringsAsFactors = FALSE)
 
 # Step 6: Read only matched files
-DGE <- readDGE(files = file_df$File, columns = c(1, 5))
+DGE <- edgeR::readDGE(files = file_df$File, columns = c(1, 5))
 
 # Step 7: Rename samples
 colnames(DGE$counts) <- file_df$SampleName
@@ -70,7 +86,7 @@ rownames(DGE$samples) <- file_df$SampleName
 DGE$samples$SampleName <- file_df$SampleName
 
 # Step 8: Merge metadata (safe way that preserves order)
-DGE$samples <- left_join(DGE$samples, sample.keys, by = "SampleName")
+DGE$samples <- dplyr::left_join(DGE$samples, sample.keys, by = "SampleName")
 rownames(DGE$samples) <- DGE$samples$SampleName
 
 # Annotate genes
