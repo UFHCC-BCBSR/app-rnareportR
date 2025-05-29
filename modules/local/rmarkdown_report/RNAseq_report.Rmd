@@ -38,19 +38,29 @@ select <- dplyr::select
 parse_params <- function(filepath) {
   lines <- readLines(filepath)
   param_list <- list()
-  
+
   for (line in lines) {
     if (grepl("^--", line)) {
       parts <- strsplit(line, " ", fixed = TRUE)[[1]]
-      key <- gsub("--", "", parts[1])  # Remove the "--"
-      value <- paste(parts[-1], collapse = " ")  # Join the rest as value
-      value <- gsub('^"|"$', '', value)  # Remove any surrounding quotes
+      key <- gsub("^--", "", parts[1])
+      value <- paste(parts[-1], collapse = " ")
+      value <- gsub('^"|"$', '', value)  # Remove surrounding quotes
+
+      # Convert logical strings to actual logical values
+      if (tolower(value) == "true") {
+        value <- TRUE
+      } else if (tolower(value) == "false") {
+        value <- FALSE
+      }
+
       param_list[[key]] <- value
     }
   }
-  
+
   return(param_list)
 }
+
+TEST=TRUE
 if (!exists("TEST") || is.null(TEST)) {
   # Production mode: read from passed-in params
   report_params <- parse_params(params$params_file)
