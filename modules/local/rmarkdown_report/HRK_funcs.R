@@ -121,8 +121,57 @@ generate_enrichment_plot <- function(gene_lists, de_results_df, universe_entrez,
   })
   
   # **Save full filtered results for downloading**
-  download_go_results <- filtered_results %>%
-    select(Cluster, Description, p.adjust, GeneSymbols, everything())  # Reorder columns
+  # Store all raw results before filtering (optional for download)
+  all_results <- formula_res@compareClusterResult
+  
+  # Recalculate GeneSymbols for ALL terms if download_nonsig_enrich is TRUE
+  if (isTRUE(report_params$download_nonsig_enrich)) {
+    all_results$GeneSymbols <- sapply(seq_len(nrow(all_results)), function(i) {
+      gene_list <- all_results$geneID[i]
+      contrast_full <- as.character(all_results$Cluster[i]) 
+      
+      contrast_base <- sub("\\.(up|down)$", "", contrast_full)
+      direction <- sub("^.*\\.", "", contrast_full)
+      
+      entrez_ids <- unlist(strsplit(gene_list, "/"))
+      
+      de_sub <- de_results_df %>%
+        filter(grepl(contrast_base, contrast),
+               ENTREZID %in% entrez_ids,
+               case_when(
+                 direction == "up" ~ logFC > 0,
+                 direction == "down" ~ logFC < 0
+               ))
+      
+      top_genes <- de_sub %>%
+        arrange(adj.P.value) %>%
+        slice_head(n = 20) %>%
+        pull(ENTREZID)
+      
+      gene_symbols <- mapIds(annotation_obj,
+                             keys = top_genes,
+                             column = "SYMBOL",
+                             keytype = "ENTREZID",
+                             multiVals = "first") %>%
+        na.omit()
+      
+      if (length(gene_symbols) > 0) {
+        paste(gene_symbols, collapse = "<br>")
+      } else {
+        NA_character_
+      }
+    })
+  }
+  
+  # Choose download results based on flag
+  download_go_results <- if (isTRUE(report_params$download_nonsig_enrich)) {
+    all_results %>%
+      select(Cluster, Description, p.adjust, GeneSymbols, everything())
+  } else {
+    filtered_results %>%
+      select(Cluster, Description, p.adjust, GeneSymbols, everything())
+  }
+  
   
   # **Identify top `n` GO terms across all clusters for plotting**
   top_GO_terms <- filtered_results %>%
@@ -342,9 +391,57 @@ generate_kegg_enrichment_plot <- function(gene_lists, de_results_df, universe_en
   
   
   
-  # **Save full filtered results for downloading**
-  download_kegg_results <- filtered_results %>%
-    select(Cluster, Description, p.adjust, GeneSymbols, everything())  # Reorder columns
+  # Store all raw results before filtering (optional for download)
+  all_results <- kegg_res@compareClusterResult
+  
+  # Recalculate GeneSymbols for ALL terms if download_nonsig_enrich is TRUE
+  if (isTRUE(report_params$download_nonsig_enrich)) {
+    all_results$GeneSymbols <- sapply(seq_len(nrow(all_results)), function(i) {
+      gene_list <- all_results$geneID[i]
+      contrast_full <- as.character(all_results$Cluster[i]) 
+      
+      contrast_base <- sub("\\.(up|down)$", "", contrast_full)
+      direction <- sub("^.*\\.", "", contrast_full)
+      
+      entrez_ids <- unlist(strsplit(gene_list, "/"))
+      
+      de_sub <- de_results_df %>%
+        filter(grepl(contrast_base, contrast),
+               ENTREZID %in% entrez_ids,
+               case_when(
+                 direction == "up" ~ logFC > 0,
+                 direction == "down" ~ logFC < 0
+               ))
+      
+      top_genes <- de_sub %>%
+        arrange(adj.P.value) %>%
+        slice_head(n = 20) %>%
+        pull(ENTREZID)
+      
+      gene_symbols <- mapIds(annotation_obj,
+                             keys = top_genes,
+                             column = "SYMBOL",
+                             keytype = "ENTREZID",
+                             multiVals = "first") %>%
+        na.omit()
+      
+      if (length(gene_symbols) > 0) {
+        paste(gene_symbols, collapse = "<br>")
+      } else {
+        NA_character_
+      }
+    })
+  }
+  
+  # Choose download results based on flag
+  download_kegg_results <- if (isTRUE(report_params$download_nonsig_enrich)) {
+    all_results %>%
+      select(Cluster, Description, p.adjust, GeneSymbols, everything())
+  } else {
+    filtered_results %>%
+      select(Cluster, Description, p.adjust, GeneSymbols, everything())
+  }
+  
   
   # **Identify top `n` KEGG pathways across all clusters for plotting**
   top_KEGG_terms <- filtered_results %>%
