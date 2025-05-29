@@ -690,26 +690,28 @@ library(limma)
 library(dplyr)
 library(tidyr)
 
-display_de_summary <- function(efit, lfc = 0.58, pval = 0.05, adjust_method = "BH",contrast) {
-  # Step 1: Get summary of DE results (produces a table object)
+display_de_summary <- function(efit, lfc = 0.58, pval = 0.05, adjust_method = "BH", contrast) {
+  # Step 1: Get summary table
   de_summary <- summary(decideTests(efit, lfc = lfc, adjust.method = adjust_method, p.value = pval))
   
-  # Step 2: Convert table to data frame with explicit variable names
+  # Step 2: Convert to data frame
   de_summary_df <- as.data.frame(de_summary, responseName = "Number of Genes")
   
-  # Step 3: Rename columns explicitly
+  # Step 3: Rename columns
   colnames(de_summary_df) <- c("Direction", "Contrast", "Number of Genes")
   
-  # Step 4: Remove leading "X" and also any "X" after a "-" if followed by a digit
-  de_summary_df$Contrast <- gsub("^X| X", "", de_summary_df$Contrast, perl = TRUE)
+  # Step 4: Clean Contrast names
+  de_summary_df$Contrast <- gsub("`", "", de_summary_df$Contrast)                # remove backticks
+  de_summary_df$Contrast <- gsub("\\bX(?=[0-9])", "", de_summary_df$Contrast, perl = TRUE)  # remove X before a digit
   
+  # Optional: Move 'Contrast' column to front
   de_summary_df <- de_summary_df %>% relocate(Contrast)
   
-  # Step 5: Create an interactive datatable
+  # Step 5: Display datatable
   datatable(
     de_summary_df,
-    rownames = FALSE,  # Hide row names
-    caption = paste("Summary of Differential Expression Results (abs(lfc) > 0.58, adj.p.val < 0.05) for contrast",contrast),
+    rownames = FALSE,
+    caption = paste("Summary of Differential Expression Results (abs(lfc) > 0.58, adj.p.val < 0.05) for contrast", contrast),
     options = list(
       dom = 'Bfrtip',
       buttons = c('copy'),
@@ -718,6 +720,7 @@ display_de_summary <- function(efit, lfc = 0.58, pval = 0.05, adjust_method = "B
     )
   )
 }
+
 
 library(dplyr)
 
