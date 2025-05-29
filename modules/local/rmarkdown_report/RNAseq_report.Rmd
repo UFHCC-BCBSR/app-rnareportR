@@ -56,7 +56,7 @@ if (!exists("TEST") || is.null(TEST)) {
   report_params <- parse_params(params$params_file)
 } else {
   # Testing mode
-  report_params <- parse_params("/blue/cancercenter-dept/PROJECTS/CHENGGUO_XING/MOUSE_LIVER_4WEEK_TOBACCO_KAVA/Downstream_Analysis/nfcore-rmarkdown-report-module/CX_liver_report_params.txt")
+  report_params <- parse_params("/blue/cancercenter-dept/PIPELINES/REPORTING/rmarkdown_report_module/param_files/Sharma_params.txt")
 }
 
 ```
@@ -257,7 +257,7 @@ if (!is.null(report_params$batch_var) && report_params$batch_var == "Batch") {
 }
 
 
-plot_pca_combined(dge_list, grp_var = "Condition", annotation_labels = annotation_labels)
+plot_pca_combined(dge_list, grp_var = report_params$group_var, annotation_labels = annotation_labels)
 if (!is.null(report_params$batch_var) && report_params$batch_var == "Batch") {
 plot_pca_combined(dge_list, grp_var = "Batch", annotation_labels = annotation_labels)}
 ```
