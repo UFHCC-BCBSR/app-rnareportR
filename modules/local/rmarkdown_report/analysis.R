@@ -227,16 +227,22 @@ if (!is.null(report_params$contrasts) && file.exists(report_params$contrasts)) {
 # Generate contrast list
 contrasts_list <- setNames(
   lapply(contrast_strings, function(contrast) {
-    groups <- trimws(unlist(strsplit(contrast, "-")))  # Remove whitespace
+    groups <- trimws(unlist(strsplit(contrast, "-")))
     
-    print(paste("Processing contrast:", paste(groups, collapse = " - ")))  # Debugging step
+    # Make group names syntactically valid (e.g., add 'X' to '3D...' etc.)
+    group1 <- make.names(groups[1])
+    group2 <- make.names(groups[2])
     
-    # Directly pass the contrast formula (no eval/parse needed!)
-    makeContrasts(contrasts = paste(groups[1], "-", groups[2]), 
-                  levels = colnames(vfit$design))
+    print(paste("Processing contrast:", group1, "-", group2))
+    
+    makeContrasts(
+      contrasts = paste0("`", group1, "` - `", group2, "`"),
+      levels = colnames(vfit$design)
+    )
   }),
-  paste0(gsub("-", "_vs_", contrast_strings))  # Clean names for list elements
+  paste0(gsub("-", "_vs_", contrast_strings))
 )
+
 
 
 # Print the list to check
