@@ -61,8 +61,8 @@ colnames(sample.keys)[1] <- "SampleName"
 matched_files <- character(nrow(sample.keys))
 matched_names <- character(nrow(sample.keys))
 
-for (i in seq_along(sample.keys$samples)) {
-  sample_name <- sample.keys$samples[i]
+for (i in seq_along(sample.keys$SampleName)) {
+  sample_name <- sample.keys$SampleName[i]
   matches <- grep(sample_name, file_sample_names, value = TRUE)
   
   if (length(matches) == 0) {
@@ -75,7 +75,7 @@ for (i in seq_along(sample.keys$samples)) {
   }
 }
 
-file_df <- data.frame(SampleName = sample.keys$samples, File = matched_files, stringsAsFactors = FALSE)
+file_df <- data.frame(SampleName = sample.keys$SampleName, File = matched_files, stringsAsFactors = FALSE)
 
 # Step 6: Read only matched files
 DGE <- edgeR::readDGE(files = file_df$File, columns = c(1, 5))
@@ -89,46 +89,45 @@ DGE$samples$SampleName <- file_df$SampleName
 DGE$samples <- dplyr::left_join(DGE$samples, sample.keys, by = "SampleName")
 rownames(DGE$samples) <- DGE$samples$SampleName
 
-# Step 1: Get rownames (gene identifiers from RSEM)
-gene_ids <- rownames(DGE)
+# Step 1: Get current gene identifiers from DGE (could be SYMBOL or ENSEMBL)
+gene_ids <- trimws(rownames(DGE))
 
-# Count how many start with "ENS"
+# Step 2: Detect type — assume SYMBOL if fewer than half look like Ensembl IDs
 n_ensembl <- sum(grepl("^ENS", gene_ids))
 n_total <- length(gene_ids)
-
-# Assume gene symbols if fewer than half are Ensembl IDs
 is_symbol <- (n_ensembl / n_total) < 0.5
 
-# Step 3: Choose appropriate keytype and perform annotation
+# Step 3: Retrieve gene annotations from org.Hs.eg.db or similar
 if (is_symbol) {
-  # Treat as gene symbols
-  genes <- AnnotationDbi::select(annotation_obj, 
-                                 keys = gene_ids, 
-                                 columns = c("SYMBOL", "ENSEMBL"), 
+  # Input rownames are SYMBOLs, we want to convert to ENSEMBL IDs
+  genes <- AnnotationDbi::select(annotation_obj,
+                                 keys = gene_ids,
+                                 columns = c("SYMBOL", "ENSEMBL"),
                                  keytype = "SYMBOL")
   
-  # Remove duplicates based on SYMBOL
   genes <- genes[!duplicated(genes$SYMBOL), ]
-  
-  # Match back to DGE order
   matched_genes <- genes[match(gene_ids, genes$SYMBOL), ]
   
+  # Update rownames to Ensembl IDs
+  valid_ensembl <- !is.na(matched_genes$ENSEMBL)
+  rownames(DGE) <- matched_genes$ENSEMBL
+  DGE <- DGE[valid_ensembl, , keep.lib.sizes = FALSE]  # Remove rows without valid ENSEMBL
+  matched_genes <- matched_genes[valid_ensembl, ]
+  
 } else {
-  # Treat as Ensembl IDs
-  genes <- AnnotationDbi::select(annotation_obj, 
-                                 keys = gene_ids, 
-                                 columns = c("ENSEMBL", "SYMBOL"), 
+  # Input rownames are already ENSEMBL
+  genes <- AnnotationDbi::select(annotation_obj,
+                                 keys = gene_ids,
+                                 columns = c("ENSEMBL", "SYMBOL"),
                                  keytype = "ENSEMBL")
   
-  # Remove duplicates based on ENSEMBL
   genes <- genes[!duplicated(genes$ENSEMBL), ]
-  
-  # Match back to DGE order
   matched_genes <- genes[match(gene_ids, genes$ENSEMBL), ]
 }
 
-# Step 4: Attach to DGE object
+# Step 4: Attach the annotation table
 DGE$genes <- matched_genes
+
 
 
 #############################################
