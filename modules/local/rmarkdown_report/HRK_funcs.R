@@ -506,7 +506,10 @@ generate_heatmap <- function(efit_results_df, lcpm_matrix, dge_list_NOISeq, titl
   
   # Extract contrast name dynamically
   contrast_name <- unique(efit_results_df$contrast)[1]  # Ensure it's a single contrast
-  contrast_groups <- unlist(strsplit(contrast_name, " - "))  # Extract two groups being compared
+  contrast_groups <- unlist(strsplit(contrast_name, " - "))
+  contrast_groups <- gsub("`", "", contrast_groups)                # remove backticks
+  contrast_groups <- gsub("^X(?=\\d)", "", contrast_groups, perl = TRUE)  # remove leading 'X' before a digit
+  
   
   # Filter samples that belong to these groups
   selected_samples <- dge_list_NOISeq$samples %>%
