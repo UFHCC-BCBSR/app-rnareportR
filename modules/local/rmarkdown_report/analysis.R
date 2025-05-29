@@ -89,23 +89,47 @@ DGE$samples$SampleName <- file_df$SampleName
 DGE$samples <- dplyr::left_join(DGE$samples, sample.keys, by = "SampleName")
 rownames(DGE$samples) <- DGE$samples$SampleName
 
-# Annotate genes
-ensemblid <- rownames(DGE)
+# Step 1: Get rownames (gene identifiers from RSEM)
+gene_ids <- rownames(DGE)
 
-# Get gene annotations
-genes <- AnnotationDbi::select(annotation_obj, 
-                               keys = ensemblid, 
-                               columns = c("ENSEMBL", "SYMBOL"), 
-                               keytype = "ENSEMBL")
+# Count how many start with "ENS"
+n_ensembl <- sum(grepl("^ENS", gene_ids))
+n_total <- length(gene_ids)
 
-# Remove duplicated Ensembl IDs (keeping the first occurrence)
-genes <- genes[!duplicated(genes$ENSEMBL), ]
+# Assume gene symbols if fewer than half are Ensembl IDs
+is_symbol <- (n_ensembl / n_total) < 0.5
 
-# Ensure we retain all IDs and row order in DGE
-matched_genes <- genes[match(ensemblid, genes$ENSEMBL), ]
+# Step 3: Choose appropriate keytype and perform annotation
+if (is_symbol) {
+  # Treat as gene symbols
+  genes <- AnnotationDbi::select(annotation_obj, 
+                                 keys = gene_ids, 
+                                 columns = c("SYMBOL", "ENSEMBL"), 
+                                 keytype = "SYMBOL")
+  
+  # Remove duplicates based on SYMBOL
+  genes <- genes[!duplicated(genes$SYMBOL), ]
+  
+  # Match back to DGE order
+  matched_genes <- genes[match(gene_ids, genes$SYMBOL), ]
+  
+} else {
+  # Treat as Ensembl IDs
+  genes <- AnnotationDbi::select(annotation_obj, 
+                                 keys = gene_ids, 
+                                 columns = c("ENSEMBL", "SYMBOL"), 
+                                 keytype = "ENSEMBL")
+  
+  # Remove duplicates based on ENSEMBL
+  genes <- genes[!duplicated(genes$ENSEMBL), ]
+  
+  # Match back to DGE order
+  matched_genes <- genes[match(gene_ids, genes$ENSEMBL), ]
+}
 
-# Assign the matched gene annotations as a new column in DGE
+# Step 4: Attach to DGE object
 DGE$genes <- matched_genes
+
 
 #############################################
 #########  FILTER GENES  ####################
