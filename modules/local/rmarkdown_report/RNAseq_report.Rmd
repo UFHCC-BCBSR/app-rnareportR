@@ -303,7 +303,7 @@ library(RColorBrewer)
 library(grid)
 
 # Filter samples
-if (!is.null(report_params$filter_samples) || report_params$filter_samples != ""){
+if (!is.null(report_params$filter_samples) && report_params$filter_samples != ""){
   selected_samples <- sample.keys %>%
     filter(!SampleName %in% report_params$filter_samples) %>%
     pull(SampleName)
