@@ -637,15 +637,23 @@ generate_heatmap <- function(efit_results_df, lcpm_matrix, dge_list_NOISeq, titl
   sidecols <- selected_samples %>% select(SampleName, all_of(report_params$group_var))
   rownames(sidecols) <- sidecols$SampleName
   
-  # Step 6: Reorder `lcpm_filtered` based on sorted `sidecols`
-  sidecols <- sidecols %>% arrange(all_of(report_params$group_var))  
+  # Step 6: Arrange `lcpm_filtered` based on sorted `sidecols`
+  sidecols <- sidecols %>% arrange(all_of(report_params$group_var))
+  
+  # transpose so that now samples are columns and genes are rows
   lcpm_filtered <- t(lcpm_filtered)
   
-  # Ensure order matches
+  # Ensure sample order matches data
   matching_indices <- match(rownames(sidecols), colnames(lcpm_filtered))  
   lcpm_filtered <- lcpm_filtered[, matching_indices, drop = FALSE]  
-  rownames(lcpm_filtered) <- top50_sigOE_genes$SYMBOL  
   
+  # Add rownames to lcpm matrix subset ensuring order matches
+  gene_indices <- match(top50_sigOE_genes$ensembleID, rownames(lcpm_filtered))
+  valid_genes <- !is.na(gene_indices)
+  lcpm_filtered <- lcpm_filtered[gene_indices[valid_genes], ]
+  gene_symbols <- top50_sigOE_genes$SYMBOL[valid_genes]
+  rownames(lcpm_filtered) <- gene_symbols
+
   # Step 7: Define dynamic colors for the annotation
   group_levels <- unique(selected_samples[[report_params$group_var]])  
   color_palette <- brewer.pal(min(length(group_levels), 8), "Set2")  
