@@ -526,7 +526,7 @@ heatmap_list <- lapply(seq_along(efit_results_dfs), function(i) {
     efit_results_df = efit_results_dfs[[i]],  
     lcpm_matrix = lcpm_matrix,  
     dge_list_NOISeq = dge_list_NOISeq,  
-    title = paste("Gene Expression (logCPM) of Top 50 DE Genes\n", gsub("efit_|_results_df","",names(efit_results_dfs)[i])),  
+    title = paste("Scaled Gene Expression (Z-scores of logCPM) of Top 50 DE Genes\n", gsub("efit_|_results_df","",names(efit_results_dfs)[i])),  
     num_genes = 50,  
     fontsize_row = 9
   )
