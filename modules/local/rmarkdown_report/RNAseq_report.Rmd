@@ -60,7 +60,7 @@ parse_params <- function(filepath) {
   return(param_list)
 }
 
-TEST=TRUE
+#TEST=FALSE
 if (!exists("TEST") || is.null(TEST)) {
   # Production mode: read from passed-in params
   report_params <- parse_params(params$params_file)
