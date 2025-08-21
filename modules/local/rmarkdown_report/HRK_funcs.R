@@ -7,6 +7,7 @@ library(heatmaply)
 library(org.Mm.eg.db)
 
 generate_enrichment_plot <- function(gene_lists, de_results_df, universe_entrez, ont_category, significance_threshold = 0.05, top_n = 10, annotation_db) {
+  pvalue_cutoff <- if (isTRUE(report_params$download_nonsig_enrich)) 1 else significance_threshold
   annotation_obj <- get(annotation_db, envir = asNamespace(annotation_db)) 
   names(gene_lists) <- gsub("efit_|_results_df", "", names(gene_lists))
   # Ensure gene lists are named and define contrast order
@@ -31,7 +32,7 @@ generate_enrichment_plot <- function(gene_lists, de_results_df, universe_entrez,
     OrgDb = annotation_obj,
     keyType = "ENTREZID",
     ont = ont_category,
-    pvalueCutoff = 0.05
+    pvalueCutoff = pvalue_cutoff
   )
   
   # Handle no results case
@@ -310,6 +311,8 @@ generate_enrichment_plot <- function(gene_lists, de_results_df, universe_entrez,
 #ggsave("GO_Enrichment_BP.png", plots$static_plot, width = 10, height = 12, dpi = 300,bg = "white")
 
 generate_kegg_enrichment_plot <- function(gene_lists, de_results_df, universe_entrez, significance_threshold = 0.05, top_n = 10,annotation_db) {
+  pvalue_cutoff <- if (isTRUE(report_params$download_nonsig_enrich)) 1 else significance_threshold
+  
   annotation_obj <- get(annotation_db, envir = asNamespace(annotation_db)) 
   names(gene_lists) <- gsub("efit_|_results_df","",names(gene_lists))
   
@@ -334,7 +337,7 @@ generate_kegg_enrichment_plot <- function(gene_lists, de_results_df, universe_en
     universe = na.omit(universe_entrez),
     organism = report_params$organism,
     keyType = "kegg",
-    pvalueCutoff = 0.05
+    pvalueCutoff = pvalue_cutoff
   )
   
   # Ensure clusters are ordered correctly
