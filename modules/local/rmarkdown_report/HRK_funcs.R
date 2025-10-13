@@ -6,9 +6,10 @@ library(plotly)
 library(heatmaply)
 library(org.Mm.eg.db)
 
-generate_enrichment_plot <- function(gene_lists, de_results_df, universe_entrez, ont_category, significance_threshold = 0.05, top_n = 10,annotation_db) {
+generate_enrichment_plot <- function(gene_lists, de_results_df, universe_entrez, ont_category, significance_threshold = 0.05, top_n = 10, annotation_db) {
+  pvalue_cutoff <- if (isTRUE(report_params$download_nonsig_enrich)) 1 else significance_threshold
   annotation_obj <- get(annotation_db, envir = asNamespace(annotation_db)) 
-  names(gene_lists) <- gsub("efit_|_results_df","",names(gene_lists))
+  names(gene_lists) <- gsub("efit_|_results_df", "", names(gene_lists))
   # Ensure gene lists are named and define contrast order
   if (is.null(names(gene_lists))) stop("Each gene list must be named!")
   contrast_order <- names(gene_lists)
@@ -31,8 +32,26 @@ generate_enrichment_plot <- function(gene_lists, de_results_df, universe_entrez,
     OrgDb = annotation_obj,
     keyType = "ENTREZID",
     ont = ont_category,
-    pvalueCutoff = 0.05
+    pvalueCutoff = pvalue_cutoff
   )
+  
+  # Handle no results case
+  if (is.null(formula_res) || nrow(formula_res@compareClusterResult) == 0) {
+    formula_res <- new("compareClusterResult",
+                       compareClusterResult = data.frame(
+                         Cluster = factor(),
+                         ID = character(),
+                         Description = character(),
+                         GeneRatio = character(),
+                         BgRatio = character(),
+                         pvalue = numeric(),
+                         p.adjust = numeric(),
+                         qvalue = numeric(),
+                         geneID = character(),
+                         Count = integer(),
+                         stringsAsFactors = FALSE
+                       ))
+  }
   
   # Ensure clusters are ordered correctly
   formula_res@compareClusterResult$Cluster <- factor(
@@ -45,6 +64,23 @@ generate_enrichment_plot <- function(gene_lists, de_results_df, universe_entrez,
     formula_res@compareClusterResult,
     p.adjust <= significance_threshold
   )
+  
+  # Handle the special case: no enrichment found
+  if (nrow(filtered_results) == 0) {
+    message_plot <- ggplot() +
+      annotate("text", x = 1, y = 1, label = paste0("No significant GO enrichment found\n(", ont_category, ")"), size = 6, hjust = 0.5) +
+      theme_void() +
+      ggtitle(paste("GO Term Enrichment (", ont_category, ")", sep = ""))
+    
+    interactive_plot <- ggplotly(message_plot)
+    static_plot <- message_plot
+    
+    return(list(
+      interactive_plot = interactive_plot,
+      static_plot = static_plot,
+      go_results = NULL
+    ))
+  }
   
   filtered_results$GeneSymbols <- sapply(seq_len(nrow(filtered_results)), function(i) {
     gene_list <- filtered_results$geneID[i]
@@ -85,10 +121,58 @@ generate_enrichment_plot <- function(gene_lists, de_results_df, universe_entrez,
     }
   })
   
-  
   # **Save full filtered results for downloading**
-  download_go_results <- filtered_results %>%
-    select(Cluster, Description, p.adjust, GeneSymbols, everything())  # Reorder columns
+  # Store all raw results before filtering (optional for download)
+  all_results <- formula_res@compareClusterResult
+  
+  # Recalculate GeneSymbols for ALL terms if download_nonsig_enrich is TRUE
+  if (isTRUE(report_params$download_nonsig_enrich)) {
+    all_results$GeneSymbols <- sapply(seq_len(nrow(all_results)), function(i) {
+      gene_list <- all_results$geneID[i]
+      contrast_full <- as.character(all_results$Cluster[i]) 
+      
+      contrast_base <- sub("\\.(up|down)$", "", contrast_full)
+      direction <- sub("^.*\\.", "", contrast_full)
+      
+      entrez_ids <- unlist(strsplit(gene_list, "/"))
+      
+      de_sub <- de_results_df %>%
+        filter(grepl(contrast_base, contrast),
+               ENTREZID %in% entrez_ids,
+               case_when(
+                 direction == "up" ~ logFC > 0,
+                 direction == "down" ~ logFC < 0
+               ))
+      
+      top_genes <- de_sub %>%
+        arrange(adj.P.value) %>%
+        slice_head(n = 20) %>%
+        pull(ENTREZID)
+      
+      gene_symbols <- mapIds(annotation_obj,
+                             keys = top_genes,
+                             column = "SYMBOL",
+                             keytype = "ENTREZID",
+                             multiVals = "first") %>%
+        na.omit()
+      
+      if (length(gene_symbols) > 0) {
+        paste(gene_symbols, collapse = "<br>")
+      } else {
+        NA_character_
+      }
+    })
+  }
+  
+  # Choose download results based on flag
+  download_go_results <- if (isTRUE(report_params$download_nonsig_enrich)) {
+    all_results %>%
+      select(Cluster, Description, p.adjust, GeneSymbols, everything())
+  } else {
+    filtered_results %>%
+      select(Cluster, Description, p.adjust, GeneSymbols, everything())
+  }
+  
   
   # **Identify top `n` GO terms across all clusters for plotting**
   top_GO_terms <- filtered_results %>%
@@ -108,7 +192,6 @@ generate_enrichment_plot <- function(gene_lists, de_results_df, universe_entrez,
     mutate(GeneRatio = sapply(strsplit(as.character(GeneRatio), "/"), function(x) as.numeric(x[1]) / as.numeric(x[2])))
   
   # **Restore GO Term Ordering Using Hierarchical Clustering**
-  
   reorder_GO_terms <- function(df) {
     term_matrix <- table(df$Description, df$Cluster)  
     
@@ -208,6 +291,7 @@ generate_enrichment_plot <- function(gene_lists, de_results_df, universe_entrez,
     go_results = download_go_results
   ))
 }
+
 # Run the function
 #GO_BP_results <- generate_enrichment_plot(
 #  gene_lists = gene_lists, 
@@ -227,6 +311,8 @@ generate_enrichment_plot <- function(gene_lists, de_results_df, universe_entrez,
 #ggsave("GO_Enrichment_BP.png", plots$static_plot, width = 10, height = 12, dpi = 300,bg = "white")
 
 generate_kegg_enrichment_plot <- function(gene_lists, de_results_df, universe_entrez, significance_threshold = 0.05, top_n = 10,annotation_db) {
+  pvalue_cutoff <- if (isTRUE(report_params$download_nonsig_enrich)) 1 else significance_threshold
+  
   annotation_obj <- get(annotation_db, envir = asNamespace(annotation_db)) 
   names(gene_lists) <- gsub("efit_|_results_df","",names(gene_lists))
   
@@ -251,7 +337,7 @@ generate_kegg_enrichment_plot <- function(gene_lists, de_results_df, universe_en
     universe = na.omit(universe_entrez),
     organism = report_params$organism,
     keyType = "kegg",
-    pvalueCutoff = 0.05
+    pvalueCutoff = pvalue_cutoff
   )
   
   # Ensure clusters are ordered correctly
@@ -308,9 +394,57 @@ generate_kegg_enrichment_plot <- function(gene_lists, de_results_df, universe_en
   
   
   
-  # **Save full filtered results for downloading**
-  download_kegg_results <- filtered_results %>%
-    select(Cluster, Description, p.adjust, GeneSymbols, everything())  # Reorder columns
+  # Store all raw results before filtering (optional for download)
+  all_results <- kegg_res@compareClusterResult
+  
+  # Recalculate GeneSymbols for ALL terms if download_nonsig_enrich is TRUE
+  if (isTRUE(report_params$download_nonsig_enrich)) {
+    all_results$GeneSymbols <- sapply(seq_len(nrow(all_results)), function(i) {
+      gene_list <- all_results$geneID[i]
+      contrast_full <- as.character(all_results$Cluster[i]) 
+      
+      contrast_base <- sub("\\.(up|down)$", "", contrast_full)
+      direction <- sub("^.*\\.", "", contrast_full)
+      
+      entrez_ids <- unlist(strsplit(gene_list, "/"))
+      
+      de_sub <- de_results_df %>%
+        filter(grepl(contrast_base, contrast),
+               ENTREZID %in% entrez_ids,
+               case_when(
+                 direction == "up" ~ logFC > 0,
+                 direction == "down" ~ logFC < 0
+               ))
+      
+      top_genes <- de_sub %>%
+        arrange(adj.P.value) %>%
+        slice_head(n = 20) %>%
+        pull(ENTREZID)
+      
+      gene_symbols <- mapIds(annotation_obj,
+                             keys = top_genes,
+                             column = "SYMBOL",
+                             keytype = "ENTREZID",
+                             multiVals = "first") %>%
+        na.omit()
+      
+      if (length(gene_symbols) > 0) {
+        paste(gene_symbols, collapse = "<br>")
+      } else {
+        NA_character_
+      }
+    })
+  }
+  
+  # Choose download results based on flag
+  download_kegg_results <- if (isTRUE(report_params$download_nonsig_enrich)) {
+    all_results %>%
+      select(Cluster, Description, p.adjust, GeneSymbols, everything())
+  } else {
+    filtered_results %>%
+      select(Cluster, Description, p.adjust, GeneSymbols, everything())
+  }
+  
   
   # **Identify top `n` KEGG pathways across all clusters for plotting**
   top_KEGG_terms <- filtered_results %>%
@@ -336,14 +470,15 @@ generate_kegg_enrichment_plot <- function(gene_lists, de_results_df, universe_en
     if (nrow(term_matrix) > 1) {
       term_dist <- dist(term_matrix, method = "binary")  
       term_hclust <- hclust(term_dist, method = "ward.D2")  
-      term_order <- rownames(term_matrix)[term_hclust$order]
+      term_order <- unique(rownames(term_matrix)[term_hclust$order])
     } else {
-      term_order <- df$Description  
+      term_order <- unique(df$Description)  # <--- this was the bug
     }
     
     df$Description <- factor(df$Description, levels = term_order)  
     return(df)
   }
+  
   
   kegg_res@compareClusterResult <- reorder_KEGG_terms(kegg_res@compareClusterResult)
   
@@ -471,7 +606,10 @@ generate_heatmap <- function(efit_results_df, lcpm_matrix, dge_list_NOISeq, titl
   
   # Extract contrast name dynamically
   contrast_name <- unique(efit_results_df$contrast)[1]  # Ensure it's a single contrast
-  contrast_groups <- unlist(strsplit(contrast_name, " - "))  # Extract two groups being compared
+  contrast_groups <- unlist(strsplit(contrast_name, " - "))
+  contrast_groups <- gsub("`", "", contrast_groups)                # remove backticks
+  contrast_groups <- gsub("^X(?=\\d)", "", contrast_groups, perl = TRUE)  # remove leading 'X' before a digit
+  
   
   # Filter samples that belong to these groups
   selected_samples <- dge_list_NOISeq$samples %>%
@@ -499,15 +637,23 @@ generate_heatmap <- function(efit_results_df, lcpm_matrix, dge_list_NOISeq, titl
   sidecols <- selected_samples %>% select(SampleName, all_of(report_params$group_var))
   rownames(sidecols) <- sidecols$SampleName
   
-  # Step 6: Reorder `lcpm_filtered` based on sorted `sidecols`
-  sidecols <- sidecols %>% arrange(all_of(report_params$group_var))  
+  # Step 6: Arrange `lcpm_filtered` based on sorted `sidecols`
+  sidecols <- sidecols %>% arrange(all_of(report_params$group_var))
+  
+  # transpose so that now samples are columns and genes are rows
   lcpm_filtered <- t(lcpm_filtered)
   
-  # Ensure order matches
+  # Ensure sample order matches data
   matching_indices <- match(rownames(sidecols), colnames(lcpm_filtered))  
   lcpm_filtered <- lcpm_filtered[, matching_indices, drop = FALSE]  
-  rownames(lcpm_filtered) <- top50_sigOE_genes$SYMBOL  
   
+  # Add rownames to lcpm matrix subset ensuring order matches
+  gene_indices <- match(top50_sigOE_genes$ensembleID, rownames(lcpm_filtered))
+  valid_genes <- !is.na(gene_indices)
+  lcpm_filtered <- lcpm_filtered[gene_indices[valid_genes], ]
+  gene_symbols <- top50_sigOE_genes$SYMBOL[valid_genes]
+  rownames(lcpm_filtered) <- gene_symbols
+
   # Step 7: Define dynamic colors for the annotation
   group_levels <- unique(selected_samples[[report_params$group_var]])  
   color_palette <- brewer.pal(min(length(group_levels), 8), "Set2")  
@@ -655,26 +801,28 @@ library(limma)
 library(dplyr)
 library(tidyr)
 
-display_de_summary <- function(efit, lfc = 0.58, pval = 0.05, adjust_method = "BH",contrast) {
-  # Step 1: Get summary of DE results (produces a table object)
+display_de_summary <- function(efit, lfc = 0.58, pval = 0.05, adjust_method = "BH", contrast) {
+  # Step 1: Get summary table
   de_summary <- summary(decideTests(efit, lfc = lfc, adjust.method = adjust_method, p.value = pval))
   
-  # Step 2: Convert table to data frame with explicit variable names
+  # Step 2: Convert to data frame
   de_summary_df <- as.data.frame(de_summary, responseName = "Number of Genes")
   
-  # Step 3: Rename columns explicitly
+  # Step 3: Rename columns
   colnames(de_summary_df) <- c("Direction", "Contrast", "Number of Genes")
   
-  # Step 4: Remove leading "X" and also any "X" after a "-" if followed by a digit
-  de_summary_df$Contrast <- gsub("^X| X", "", de_summary_df$Contrast, perl = TRUE)
+  # Step 4: Clean Contrast names
+  de_summary_df$Contrast <- gsub("`", "", de_summary_df$Contrast)                # remove backticks
+  de_summary_df$Contrast <- gsub("\\bX(?=[0-9])", "", de_summary_df$Contrast, perl = TRUE)  # remove X before a digit
   
+  # Optional: Move 'Contrast' column to front
   de_summary_df <- de_summary_df %>% relocate(Contrast)
   
-  # Step 5: Create an interactive datatable
+  # Step 5: Display datatable
   datatable(
     de_summary_df,
-    rownames = FALSE,  # Hide row names
-    caption = paste("Summary of Differential Expression Results (abs(lfc) > 0.58, adj.p.val < 0.05) for contrast",contrast),
+    rownames = FALSE,
+    caption = paste("Summary of Differential Expression Results (abs(lfc) > 0.58, adj.p.val < 0.05) for contrast", contrast),
     options = list(
       dom = 'Bfrtip',
       buttons = c('copy'),
@@ -683,6 +831,7 @@ display_de_summary <- function(efit, lfc = 0.58, pval = 0.05, adjust_method = "B
     )
   )
 }
+
 
 library(dplyr)
 
@@ -742,7 +891,8 @@ library(car)
 
 plot_pca <- function(dge, title, grp_var=report_params$group_var, show_legend = TRUE, combine_plots = FALSE) {
   # Extract log-transformed CPM values
-  PCA_DATA <- t(cpm(dge, log = TRUE))  # Transpose to have samples as rows
+  PCA_DATA <- t(get_log_matrix(dge))
+  rownames(PCA_DATA) <- dge$samples$sample_id
   numsonly <- as.data.frame(PCA_DATA)
   numsonly <- as.data.frame(lapply(numsonly, as.numeric))  # Ensure numeric values
   
@@ -750,7 +900,7 @@ plot_pca <- function(dge, title, grp_var=report_params$group_var, show_legend = 
   pca_res <- prcomp(numsonly, center = TRUE, scale. = FALSE, rank. = 2)
   scores <- pca_res$x
   
-  # Extract group information (batch or treatment)
+  # Extract group information
   group_labels <- dge$samples[[grp_var]]  
   colors <- RColorBrewer::brewer.pal(length(unique(group_labels)), "Set1")
   
@@ -804,30 +954,7 @@ plot_pca <- function(dge, title, grp_var=report_params$group_var, show_legend = 
     yaxis = list(title = paste0("PC2 (", percentVar[2], "%)"))
   )
   
-  # **If not combining, return single plot**
-  if (!combine_plots) return(fig)
-  
-  # **Generate PCA plots for each filtering step**
-  dge_list <- dge_list
-  pca_plots <- mapply(plot_pca, dge_list, grp_var = grp_var, show_legend = c(TRUE, FALSE, FALSE), title = "", SIMPLIFY = FALSE)
-  
-  # **Combine the three plots in a single row**
-  combined_plot <- subplot(pca_plots[[1]], pca_plots[[2]], pca_plots[[3]], 
-                           nrows = 1, shareY = FALSE)
-  
-  # **Add annotations**
-  annotations = list( 
-    list(x = 0.15, y = 1.0, text = "PCA Before Filtering", xref = "paper", yref = "paper", 
-         xanchor = "center", yanchor = "bottom", showarrow = FALSE),  
-    list(x = 0.5, y = 1, text = "PCA After Filtering: NOISeq", xref = "paper", yref = "paper", 
-         xanchor = "center", yanchor = "bottom", showarrow = FALSE),
-    list(x = 0.85, y = 1, text = "PCA After Filtering: edgeR", xref = "paper", yref = "paper", 
-         xanchor = "center", yanchor = "bottom", showarrow = FALSE)
-  )
-  
-  # **Apply annotations and return combined plot**
-  combined_plot <- combined_plot %>% layout(annotations = annotations)
-  return(combined_plot)
+  return(fig)
 }
 # Define function to subset samples by contrast and run PCA
 plot_pca_by_contrast <- function(dge_list, contrast_name, group_var) {
@@ -964,8 +1091,14 @@ plot_one_pca_by_contrast <- function(dge_list, contrast_name, group_var) {
   # Subset samples based on contrast groups
   sample_subset <- dge_list$samples[dge_list$samples[[group_var]] %in% groups, ]
   dge_filtered <- dge_list
-  dge_filtered$counts <- dge_list$counts[, colnames(dge_list$counts) %in% sample_subset$SampleName]
+  selected_samples <- sample_subset$SampleName
+  
+  dge_filtered$counts <- dge_list$counts[, colnames(dge_list$counts) %in% selected_samples]
   dge_filtered$samples <- sample_subset
+  
+  if (!is.null(dge_list$E_corrected)) {
+    dge_filtered$E_corrected <- dge_list$E_corrected[, selected_samples]
+  }
   
   # Generate PCA plot
   pca_plot <- plot_pca(dge_filtered,
@@ -976,4 +1109,40 @@ plot_one_pca_by_contrast <- function(dge_list, contrast_name, group_var) {
   return(pca_plot)
 }
 
+
+plot_pca_combined <- function(dge_list, grp_var = report_params$group_var, annotation_labels = NULL) {
+  show_legend_flags <- c(TRUE, rep(FALSE, length(dge_list) - 1))
+  pca_plots <- mapply(plot_pca, dge_list, grp_var = grp_var, show_legend = show_legend_flags, title = "", SIMPLIFY = FALSE)
+  
+  combined_plot <- subplot(pca_plots, nrows = 1, shareY = FALSE)
+  
+  if (!is.null(annotation_labels)) {
+    annotations <- lapply(seq_along(annotation_labels), function(i) {
+      list(
+        x = (i - 0.5) / length(annotation_labels),
+        y = 1,
+        text = annotation_labels[i],
+        xref = "paper",
+        yref = "paper",
+        xanchor = "center",
+        yanchor = "bottom",
+        showarrow = FALSE
+      )
+    })
+    combined_plot <- combined_plot %>% layout(annotations = annotations)
+  }
+  
+  return(combined_plot)
+}
+
+
+get_log_matrix <- function(dge) {
+  if (!is.null(dge$E_corrected)) {
+    return(dge$E_corrected)
+  } else if (!is.null(dge$counts)) {
+    return(cpm(dge, log = TRUE))
+  } else {
+    stop("Input DGE object must contain either 'counts' or 'E_corrected'.")
+  }
+}
 

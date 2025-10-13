@@ -21,7 +21,22 @@ library(AnnotationDbi)
 library(org.Mm.eg.db)
 source("HRK_funcs.R")
 select <- dplyr::select
+if (!requireNamespace("statmod", quietly = TRUE)) {
+  install.packages("statmod", repos = "https://cloud.r-project.org")
+}
+
+
+#############################################
+#########  SETUP DGE OBJECT   ###############
+#############################################
+
 annotation_obj <- get(report_params$annotation_db, envir = asNamespace(report_params$annotation_db)) 
+
+# Treat empty or missing batch_var as NULL
+if (!("batch_var" %in% names(report_params)) || is.null(report_params$batch_var) ||
+    report_params$batch_var == "" || report_params$batch_var == "None") {
+  report_params$batch_var <- NULL
+}
 
 tmp_out_dir <- tempfile("rmd_tmpdir_")
 dir.create(tmp_out_dir)
@@ -36,17 +51,34 @@ files.list <- list.files(path = report_params$rsem_dir, pattern = 'genes.results
 file_sample_names <- gsub(".genes.results$", "", basename(files.list))
 
 # Step 3: Create data frame mapping sample names to files
-file_df <- data.frame(SampleName = file_sample_names, File = files.list, stringsAsFactors = FALSE)
+file_df_raw <- data.frame(SampleName = file_sample_names, File = files.list, stringsAsFactors = FALSE)
 
 # Step 4: Load sample keys
-sample.keys <- read_csv(report_params$sample_data)
+sample.keys <- read.csv(report_params$sample_data)
+colnames(sample.keys)[1] <- "SampleName"
 
-# Step 5: Filter and re-order file_df to match sample.keys
-file_df <- file_df[file_df$SampleName %in% sample.keys$SampleName, ]
-file_df <- file_df[match(sample.keys$SampleName, file_df$SampleName), ]  # ensures correct order
+# Step 5: Flexible matching - find one matching file per sample
+matched_files <- character(nrow(sample.keys))
+matched_names <- character(nrow(sample.keys))
+
+for (i in seq_along(sample.keys$SampleName)) {
+  sample_name <- sample.keys$SampleName[i]
+  matches <- grep(sample_name, file_sample_names, value = TRUE)
+  
+  if (length(matches) == 0) {
+    stop(paste0("No file matched sample name: ", sample_name))
+  } else if (length(matches) > 1) {
+    stop(paste0("Multiple files matched sample name: ", sample_name, "\nMatches: ", paste(matches, collapse = ", ")))
+  } else {
+    matched_names[i] <- matches
+    matched_files[i] <- files.list[which(file_sample_names == matches)]
+  }
+}
+
+file_df <- data.frame(SampleName = sample.keys$SampleName, File = matched_files, stringsAsFactors = FALSE)
 
 # Step 6: Read only matched files
-DGE <- readDGE(files = file_df$File, columns = c(1, 5))
+DGE <- edgeR::readDGE(files = file_df$File, columns = c(1, 5))
 
 # Step 7: Rename samples
 colnames(DGE$counts) <- file_df$SampleName
@@ -54,26 +86,53 @@ rownames(DGE$samples) <- file_df$SampleName
 DGE$samples$SampleName <- file_df$SampleName
 
 # Step 8: Merge metadata (safe way that preserves order)
-DGE$samples <- left_join(DGE$samples, sample.keys, by = "SampleName")
+DGE$samples <- dplyr::left_join(DGE$samples, sample.keys, by = "SampleName")
 rownames(DGE$samples) <- DGE$samples$SampleName
 
-# Annotate genes
-ensemblid <- rownames(DGE)
+# Step 1: Get current gene identifiers from DGE (could be SYMBOL or ENSEMBL)
+gene_ids <- trimws(rownames(DGE))
 
-# Get gene annotations
-genes <- AnnotationDbi::select(annotation_obj, 
-                               keys = ensemblid, 
-                               columns = c("ENSEMBL", "SYMBOL"), 
-                               keytype = "ENSEMBL")
+# Step 2: Detect type — assume SYMBOL if fewer than half look like Ensembl IDs
+n_ensembl <- sum(grepl("^ENS", gene_ids))
+n_total <- length(gene_ids)
+is_symbol <- (n_ensembl / n_total) < 0.5
 
-# Remove duplicated Ensembl IDs (keeping the first occurrence)
-genes <- genes[!duplicated(genes$ENSEMBL), ]
+# Step 3: Retrieve gene annotations from org.Hs.eg.db or similar
+if (is_symbol) {
+  # Input rownames are SYMBOLs, we want to convert to ENSEMBL IDs
+  genes <- AnnotationDbi::select(annotation_obj,
+                                 keys = gene_ids,
+                                 columns = c("SYMBOL", "ENSEMBL"),
+                                 keytype = "SYMBOL")
+  
+  genes <- genes[!duplicated(genes$SYMBOL), ]
+  matched_genes <- genes[match(gene_ids, genes$SYMBOL), ]
+  
+  # Update rownames to Ensembl IDs
+  valid_ensembl <- !is.na(matched_genes$ENSEMBL)
+  rownames(DGE) <- matched_genes$ENSEMBL
+  DGE <- DGE[valid_ensembl, , keep.lib.sizes = FALSE]  # Remove rows without valid ENSEMBL
+  matched_genes <- matched_genes[valid_ensembl, ]
+  
+} else {
+  # Input rownames are already ENSEMBL
+  genes <- AnnotationDbi::select(annotation_obj,
+                                 keys = gene_ids,
+                                 columns = c("ENSEMBL", "SYMBOL"),
+                                 keytype = "ENSEMBL")
+  
+  genes <- genes[!duplicated(genes$ENSEMBL), ]
+  matched_genes <- genes[match(gene_ids, genes$ENSEMBL), ]
+}
 
-# Ensure we retain all IDs and row order in DGE
-matched_genes <- genes[match(ensemblid, genes$ENSEMBL), ]
-
-# Assign the matched gene annotations as a new column in DGE
+# Step 4: Attach the annotation table
 DGE$genes <- matched_genes
+
+
+
+#############################################
+#########  FILTER GENES  ####################
+#############################################
 
 # Define treatments
 treatment.all <- as.factor(DGE$samples[[report_params$group_var]])
@@ -101,6 +160,10 @@ DGE.NOIseqfilt$counts <- filtered.data(
 DGE.NOIseqfilt$samples$lib.size <- apply(DGE.NOIseqfilt$counts, 2, sum)
 DGE.NOIseqfilt <- calcNormFactors(DGE.NOIseqfilt, method = 'TMM')
 
+#############################################
+########## BEGIN DE TEST ####################
+#############################################
+
 # Create design matriDGE
 design.mat <- model.matrix(~ 0 + DGE$samples[[report_params$group_var]])
 rownames(design.mat) <- DGE$samples$SampleName
@@ -112,9 +175,40 @@ colnames(design.mat) <- make.names(levels(as.factor(DGE$samples[[report_params$g
 png(filename = paste0(report_params$out_dir, "/voom_plot.png"))  # Open PNG device
 v <- voom(DGE.NOIseqfilt, design.mat, plot = TRUE)
 dev.off()  # Close PNG device
+# ----- Optional batch correction -----
+if (!is.null(report_params$batch_var) && report_params$batch_var %in% colnames(sample.keys)) {
+  message("Batch correction: Running duplicateCorrelation and removeBatchEffect...")
+  
+  batch <- sample.keys[[report_params$batch_var]]
+  design <- model.matrix(~ 0 + sample.keys[[report_params$group_var]])
+  
+  corfit <- duplicateCorrelation(v, design, block = batch)
+  
+  corrected_matrix <- removeBatchEffect(
+    v$E,
+    batch = batch,
+    design = design,
+    correlation = corfit$consensus.correlation,
+    block = batch
+  )
+  
+  # Add corrected matrix to object
+  v$E_corrected <- corrected_matrix
+  DGE.NOIseqfilt$E_corrected <- corrected_matrix
+  message("Batch correction complete.")
+} else {
+  message("No batch correction applied.")
+  v$E_corrected <- v$E
+  DGE.NOIseqfilt$E_corrected <- v$E
+  
+}
 
 # Fit linear model
-vfit <- lmFit(v, design.mat)
+if (!is.null(report_params$batch_var) && report_params$batch_var %in% colnames(sample.keys)) {
+  vfit <- lmFit(v, design.mat, block = batch, correlation = corfit$consensus.correlation)
+} else {
+  vfit <- lmFit(v, design.mat)
+}
 
 # Extract unique contrast names
 # contrast_strings <- unique(unlist(strsplit(DGE.NOIseqfilt$samples$Contrast, ";")))
@@ -132,16 +226,22 @@ if (!is.null(report_params$contrasts) && file.exists(report_params$contrasts)) {
 # Generate contrast list
 contrasts_list <- setNames(
   lapply(contrast_strings, function(contrast) {
-    groups <- trimws(unlist(strsplit(contrast, "-")))  # Remove whitespace
+    groups <- trimws(unlist(strsplit(contrast, "-")))
     
-    print(paste("Processing contrast:", paste(groups, collapse = " - ")))  # Debugging step
+    # Make group names syntactically valid (e.g., add 'X' to '3D...' etc.)
+    group1 <- make.names(groups[1])
+    group2 <- make.names(groups[2])
     
-    # Directly pass the contrast formula (no eval/parse needed!)
-    makeContrasts(contrasts = paste(groups[1], "-", groups[2]), 
-                  levels = colnames(vfit$design))
+    print(paste("Processing contrast:", group1, "-", group2))
+    
+    makeContrasts(
+      contrasts = paste0("`", group1, "` - `", group2, "`"),
+      levels = colnames(vfit$design)
+    )
   }),
-  paste0(gsub("-", "_vs_", contrast_strings))  # Clean names for list elements
+  paste0(gsub("-", "_vs_", contrast_strings))
 )
+
 
 
 # Print the list to check

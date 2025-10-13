@@ -38,25 +38,37 @@ select <- dplyr::select
 parse_params <- function(filepath) {
   lines <- readLines(filepath)
   param_list <- list()
-  
+
   for (line in lines) {
     if (grepl("^--", line)) {
       parts <- strsplit(line, " ", fixed = TRUE)[[1]]
-      key <- gsub("--", "", parts[1])  # Remove the "--"
-      value <- paste(parts[-1], collapse = " ")  # Join the rest as value
-      value <- gsub('^"|"$', '', value)  # Remove any surrounding quotes
+      key <- gsub("^--", "", parts[1])
+      value <- paste(parts[-1], collapse = " ")
+      value <- gsub('^"|"$', '', value)  # Remove surrounding quotes
+
+      # Convert logical strings to actual logical values
+      if (tolower(value) == "true") {
+        value <- TRUE
+      } else if (tolower(value) == "false") {
+        value <- FALSE
+      }
+
       param_list[[key]] <- value
     }
   }
-  
+
   return(param_list)
 }
 
-# Read the params file name from the YAML params
-report_params <- parse_params(params$params_file)
-#testing
-#report_params <- list() #for testing, remove later
-#report_params <- parse_params("/blue/licht/runs/H2B-E77K-Project/GE7832/Downstream_Analysis/GE7832_params_H2B.txt")
+#TEST=FALSE
+if (!exists("TEST") || is.null(TEST)) {
+  # Production mode: read from passed-in params
+  report_params <- parse_params(params$params_file)
+} else {
+  # Testing mode
+  report_params <- parse_params("/blue/cancercenter-dept/PIPELINES/REPORTING/rmarkdown_report_module/param_files/Sharma_params.txt")
+}
+
 ```
 
 ```{r analysis}
@@ -116,18 +128,12 @@ if (url == "") {
 FastQC provides quality metrics for individual sequencing samples, including read quality, GC content, and adapter contamination. The MultiQC report summarizes these results across all samples. The multiQC report is of raw sequence data. These data were quality filtered and trimmed prior to analysis. For guidance on interpreting the results, see [FastQC documentation](https://www.bioinformatics.babraham.ac.uk/projects/fastqc/).
 
 ```{r download multiqc, echo=FALSE, results="asis"}
-library(base64enc)
+url <- report_params$multiqc_url
 
-output_file <- report_params$multiqc_html
-
-if (output_file == "") {
+if (url == "") {
   cat("<p><em>This file was not included in this report.</em></p>")
 } else {
-  base64_content <- base64encode(output_file)
-  cat(sprintf(
-    '<a download="multiqc_report.html" href="data:text/html;base64,%s" class="btn btn-primary">Download MultiQC Report</a>',
-    base64_content
-  ))
+  cat(sprintf('<a href="%s" class="btn btn-primary" role="button" download>Download MultiQC Report</a>', url))
 }
 ```
 
@@ -136,9 +142,9 @@ if (output_file == "") {
 Description of Data Sheets:
 
 1. **Raw**: Raw gene count matrix before filtering or normalization.
-2. **CPM**: Counts per million (CPM) normalized expression values, with gene symbols.
-3. **LCPM**: Log-transformed CPM values, useful for visualization, with gene symbols.
-4. **Filtered**: Gene expression counts filtered to remove lowly-expressed and non-variable genes using the `NOISeq` method. **This dataset was used as input for DE analysis**
+2. **Filtered**: Gene expression counts filtered to remove lowly-expressed and non-variable genes using the `NOISeq` method. **This dataset was used as input for DE analysis.**
+3. **CPM / CPM.batchcorrected**: Counts per million (CPM) normalized expression values, with gene symbols. If batch correction was applied (see methods), this sheet contains values back-transformed from the batch-corrected log-CPM matrix.
+4. **LCPM / LCPM.batchcorrected**: Log-transformed CPM values, either uncorrected or batch corrected (if correction was requested), useful for visualization.
 5. **Sample_Metadata**: Sample information including treatment, group, and library sizes.
 
 The Excel file containing these datasets can be downloaded using the link provided below.
@@ -169,22 +175,53 @@ convert_matrix <- function(matrix, genes_df) {
   df <- df %>% select(SYMBOL, everything())  # Move gene names to first column
   return(df)
 }
-cpm_matrix <- cpm(dge_list_NOISeq)
-cpm_df <- convert_matrix(cpm_matrix, dge_list_edgeR$genes)
-lcpm_matrix <- cpm(dge_list_NOISeq,log = TRUE)
-lcpm_df <- convert_matrix(lcpm_matrix, dge_list_edgeR$genes)
 
-# Extract sample metadata from DGEList
+# Determine whether to use batch-corrected log-CPM matrix
+use_batch_corrected <- !is.null(report_params$batch_var) &&
+                       report_params$batch_var == "Batch" &&
+                       !is.null(dge_list_NOISeq$E_corrected)
+
+if (use_batch_corrected) {
+  message("Using batch-corrected matrix for both CPM and LCPM output.")
+  lcpm_matrix <- dge_list_NOISeq$E_corrected
+  cpm_matrix <- 2^lcpm_matrix  # Back-transform
+
+  cpm_df <- convert_matrix(cpm_matrix, dge_list_edgeR$genes)
+  lcpm_df <- convert_matrix(lcpm_matrix, dge_list_edgeR$genes)
+
+  cpm_name <- "CPM.batchcorrected"
+  lcpm_name <- "LCPM.batchcorrected"
+} else {
+  lcpm_matrix <- cpm(dge_list_NOISeq, log = TRUE)
+  cpm_matrix <- cpm(dge_list_NOISeq)
+
+  cpm_df <- convert_matrix(cpm_matrix, dge_list_edgeR$genes)
+  lcpm_df <- convert_matrix(lcpm_matrix, dge_list_edgeR$genes)
+
+  cpm_name <- "CPM"
+  lcpm_name <- "LCPM"
+}
+
+# Extract sample metadata
 sample_metadata <- dge_list_NOISeq$samples
 
 # Create a list of dataframes to be written to an Excel file
 df_list <- list(
   "Raw" = dge_raw_df,
-    "Filtered" = dge_NOISeq_df,
-  "CPM" = cpm_df,
-  "LCPM" = lcpm_df,
+  "Filtered" = dge_NOISeq_df,
+  cpm_df,
+  lcpm_df,
   "Sample_Metadata" = sample_metadata
 )
+
+# Rename CPM and LCPM elements after the list is created
+names(df_list)[3:4] <- c(cpm_name, lcpm_name)
+
+if (!is.null(report_params$batch_var) && report_params$batch_var == "Batch" && !is.null(dge_list_NOISeq$E_corrected)) {
+  cat("The CPM and LCPM matrices have been batch-corrected using limma::removeBatchEffect. These corrected matrices are labeled CPM.batchcorrected and LCPM.batchcorrected in the downloadable Excel file.")
+} else {
+  cat("Note:No batch correction was applied. CPM and LCPM matrices are based on the standard log-transformed CPM from filtered counts.")
+}
 
 # Generate a download button
 df_list %>% downloadthis::download_this(
@@ -205,21 +242,34 @@ Principal component analysis of gene expression data were calculated in R v4.3.3
 
 ### PCA of all samples
 
+If batch correction was applied using limma::removeBatchEffect(), the plots below compare PCA of the filtered expression matrix before and after correction. This allows visualization of how batch effects were reduced while preserving biological signal.
+
 ```{r pca all, fig.width=12, fig.height=4}
-# Define DGELists and Titles
-dge_list <- list(dge_list_raw, dge_list_NOISeq, dge_list_edgeR)
+genes_filtered <- dge_list_NOISeq$genes[rownames(dge_list_NOISeq$counts), , drop = FALSE]
+if (!is.null(report_params$batch_var) && report_params$batch_var == "Batch") {
+  dge_uncorrected <- edgeR::DGEList(
+    counts = dge_list_NOISeq$counts,
+    samples = dge_list_NOISeq$samples,
+    genes = genes_filtered
+  )
 
-combined_pca_plot <- plot_pca(dge_list_raw, title = "Combined PCA", grp_var = "Condition", combine_plots = TRUE)
-combined_pca_plot
+  dge_corrected <- edgeR::DGEList(
+    counts = 2^dge_list_NOISeq$E_corrected,
+    samples = dge_list_NOISeq$samples,
+    genes = genes_filtered
+  )
+
+  dge_list <- list(dge_uncorrected, dge_corrected)
+  annotation_labels <- c("Filtered (Uncorrected)", "Filtered (Batch Corrected)")
+} else {
+  dge_list <- list(dge_list_raw, dge_list_NOISeq, dge_list_edgeR)
+  annotation_labels <- c("Raw", "Filtered (NOISeq)", "Filtered (edgeR)")
+}
 
 
-# Generate PCA plots: Show legend only for the first plot
-pca_plots <- mapply(plot_pca, dge_list, show_legend = c(TRUE, FALSE, FALSE), title="", SIMPLIFY = FALSE)
-
-
-# Combine the three plots in a single row
-combined_plot <- subplot(pca_plots[[1]], pca_plots[[2]], pca_plots[[3]], 
-                         nrows = 1, shareY = FALSE)
+plot_pca_combined(dge_list, grp_var = report_params$group_var, annotation_labels = annotation_labels)
+if (!is.null(report_params$batch_var) && report_params$batch_var == "Batch") {
+plot_pca_combined(dge_list, grp_var = "Batch", annotation_labels = annotation_labels)}
 ```
 
 ### PCA per-contrast
@@ -245,6 +295,7 @@ pca_results <- lapply(names(efit_results_dfs), function(contrast_name) {
     group_var = report_params$group_var
   )
 })
+
 # Display PCA plots
 tagList(pca_results)
 ```
@@ -262,7 +313,7 @@ library(RColorBrewer)
 library(grid)
 
 # Filter samples
-if (!is.null(report_params$filter_samples) || report_params$filter_samples != ""){
+if (!is.null(report_params$filter_samples) && report_params$filter_samples != ""){
   selected_samples <- sample.keys %>%
     filter(!SampleName %in% report_params$filter_samples) %>%
     pull(SampleName)
@@ -475,7 +526,7 @@ heatmap_list <- lapply(seq_along(efit_results_dfs), function(i) {
     efit_results_df = efit_results_dfs[[i]],  
     lcpm_matrix = lcpm_matrix,  
     dge_list_NOISeq = dge_list_NOISeq,  
-    title = paste("Gene Expression (logCPM) of Top 50 DE Genes\n", gsub("efit_|_results_df","",names(efit_results_dfs)[i])),  
+    title = paste("Scaled Gene Expression (Z-scores of logCPM) of Top 50 DE Genes\n", gsub("efit_|_results_df","",names(efit_results_dfs)[i])),  
     num_genes = 50,  
     fontsize_row = 9
   )
@@ -586,22 +637,29 @@ GO_MF_results$interactive_plot
 download_button_png(GO_CC_results$static_plot, "GO_CC_enrich_plot",height=12)
 GO_CC_results$interactive_plot
 
-# Combine GO results into a single list of data frames
+# Combine GO results into a single list of data frames (some might be NULL)
 GO_results_list <- list(
   "BP_Results" = GO_BP_results$go_results,
   "MF_Results" = GO_MF_results$go_results,
   "CC_Results" = GO_CC_results$go_results
 )
 
-# Download GO results as an Excel file
-GO_results_list %>% downloadthis::download_this(
-  output_name = "GO_results",
-  output_extension = ".xlsx",
-  button_label = "Download GO enrichment results for all GO categories and all contrasts",
-button_type = "primary",
-  has_icon = TRUE,
-  icon = "fa fa-save"
-)
+# Remove NULL elements
+GO_results_list <- GO_results_list[!sapply(GO_results_list, is.null)]
+
+# Download GO results as an Excel file if any exist
+if (length(GO_results_list) > 0) {
+  GO_results_list %>% downloadthis::download_this(
+    output_name = "GO_results",
+    output_extension = ".xlsx",
+    button_label = "Download GO enrichment results for all GO categories and all contrasts",
+    button_type = "primary",
+    has_icon = TRUE,
+    icon = "fa fa-save"
+  )
+} else {
+  cat("<b>No GO enrichment results available to download.</b>")
+}
 ```
 
 ## KEGG Pathway Enrichment Analysis
