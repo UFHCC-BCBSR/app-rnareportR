@@ -1,4 +1,4 @@
 tmp/
 output/
-logs/*err
-logs/*out
+logs/*error
+logs/*log
