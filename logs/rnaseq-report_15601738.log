@@ -1,0 +1,33 @@
+Setting up email notifications to: hkates@ufl.edu
+==========================================
+RNA-seq Report Generation
+==========================================
+Job ID: 15601738
+Params file: /blue/cancercenter-dept/hkates/Tests/rnareport/output/test-app-2_params.txt
+Report title: RNA-seq Differential Expression Report
+Output directory: /blue/cancercenter-dept/hkates/Tests/rnareport/output
+Email notifications: hkates@ufl.edu
+Start time: Mon Oct 13 01:17:10 PM EDT 2025
+==========================================
+/apps/R/4.5/bin/Rscript
+/apps/pandoc/2.2.2.1/bin/pandoc
+pandoc 2.2.2.1
+Compiled with pandoc-types 1.17.5.1, texmath 0.11.0.1, skylighting 0.7.2
+Default user data directory: /home/hkates/.pandoc
+Copyright (C) 2006-2018 John MacFarlane
+Web:  http://pandoc.org
+This is free software; see the source for copying conditions.
+There is no warranty, not even for merchantability or fitness
+for a particular purpose.
+Output file: /blue/cancercenter-dept/hkates/Tests/rnareport/output/--report_title__RNA-seq_Differential_Expression_Report_.Report.html
+1/53                           
+2/53 [setup]                   
+3/53                           
+4/53 [params]                  
+5/53                           
+6/53 [analysis]                
+==========================================
+Report generation failed!
+Check error logs for details
+End time: Mon Oct 13 01:17:33 PM EDT 2025
+==========================================

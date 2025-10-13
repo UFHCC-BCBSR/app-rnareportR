@@ -2,13 +2,13 @@
 #SBATCH --job-name=rnaseq-report
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=200gb
-#SBATCH --time=24:00:00
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=50gb
+#SBATCH --time=01:00:00
 #SBATCH --output=logs/rnaseq-report_%j.log
 #SBATCH --error=logs/rnaseq-report_%j.error
 #SBATCH --account=cancercenter-dept
-#SBATCH --qos=cancercenter-dept-b
+#SBATCH --qos=cancercenter-dept
 
 # Usage: sbatch render-rnaseq-report.sbatch --params-file my_params.txt --title "My Report" --output-dir /path/to/output --email user@ufl.edu
 # NOTE: Run this script from the directory containing RNAseq_report.Rmd

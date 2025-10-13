@@ -821,6 +821,7 @@ server <- function(input, output, session) {
     lines <- c(lines, paste("--report_title", shQuote(input$report_title)))
     lines <- c(lines, paste("--rsem_dir", shQuote(values$selected_files$rsem_dir)))
     lines <- c(lines, paste("--group_var", shQuote(input$group_var)))
+    lines <- c(lines, paste("--output-path", shQuote(input$output_path)))
     
     # Optional batch variable
     if (!is.null(input$batch_var) && input$batch_var != "") {

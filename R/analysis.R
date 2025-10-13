@@ -44,11 +44,9 @@ run_rnaseq_analysis <- function(report_params) {
     report_params$batch_var <- NULL
   }
   
-  tmp_out_dir <- tempfile("rmd_tmpdir_")
-  dir.create(tmp_out_dir)
-  
-  # Save it in the list of parameters
-  report_params$out_dir <- tmp_out_dir
+  # Use the permanent output directory (not temp)
+  output_dir <- report_params$output_path
+  dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
   
   # Step 1: List RSEM files
   files.list <- list.files(path = report_params$rsem_dir, pattern = 'genes.results$', full.names = TRUE)
@@ -172,7 +170,8 @@ run_rnaseq_analysis <- function(report_params) {
   
   # Perform voom transformation
   # Create voom plot and save voom object
-  png(filename = paste0(report_params$out_dir, "/voom_plot.png"))
+  # Save voom plot to permanent output directory
+  png(filename = file.path(output_dir, "voom_plot.png"))
   v <- voom(DGE.NOIseqfilt, design.mat, plot = TRUE)
   dev.off()
   
@@ -255,6 +254,7 @@ run_rnaseq_analysis <- function(report_params) {
   )
   
   # Helper function for extracting top DE genes
+  # Helper function for extracting top DE genes
   top_DE_entrezIDs <- function(df, direction = "up", min_genes = 5) {
     msg <- NULL
     
@@ -270,14 +270,19 @@ run_rnaseq_analysis <- function(report_params) {
     # If too few genes, relax criteria
     if (nrow(filtered_genes) < min_genes) {
       msg <- glue::glue(
-        "⚠️ {nrow(filtered_genes)} genes passed conservative DE filter for direction '{direction}'. ",
-        "Relaxed filter used (logFC > 0 & adj.P < 0.1)."
+        "⚠️ {nrow(filtered_genes)} genes passed conservative filter for direction '{direction}'. ",
+        "Using relaxed filter (logFC > 0 & P.value < 0.05)."
       )
       
       if (direction == "up") {
-        filtered_genes <- df %>% filter(logFC > 0 & adj.P.value < 0.1)
+        filtered_genes <- df %>% filter(logFC > 0 & P.value < 0.05)
       } else {
-        filtered_genes <- df %>% filter(logFC < 0 & adj.P.value < 0.1)
+        filtered_genes <- df %>% filter(logFC < 0 & P.value < 0.05)
+      }
+      
+      # If relaxed criteria worked, clear the warning message
+      if (nrow(filtered_genes) >= min_genes) {
+        msg <- NULL  # SUCCESS - clear the warning
       }
     }
     
@@ -300,12 +305,18 @@ run_rnaseq_analysis <- function(report_params) {
       )
     }, error = function(e) {
       msg <<- glue::glue(
-        "❌ No DE genes found mapped to Entrez IDs for direction '{direction}': {conditionMessage(e)}"
+        "❌ Error mapping to Entrez IDs for direction '{direction}': {conditionMessage(e)}"
       )
       return(character(0))
     })
     
-    return(list(entrez_ids = na.omit(entrez_ids), message = msg))
+    # If mapping failed
+    if (length(na.omit(entrez_ids)) == 0) {
+      return(list(entrez_ids = character(0), message = msg))
+    }
+    
+    # SUCCESS - return genes with no error message
+    return(list(entrez_ids = na.omit(entrez_ids), message = NULL))
   }
   
   # Apply function dynamically for each contrast
@@ -338,6 +349,7 @@ run_rnaseq_analysis <- function(report_params) {
     entrez_ids_list = top_DE_entrezIDs_list,
     universe_entrez = universe_entrez,
     sample.keys = sample.keys,
-    lcpm_matrix = cpm(DGE.NOIseqfilt, log = TRUE)
+    lcpm_matrix = cpm(DGE.NOIseqfilt, log = TRUE),
+    voom_plot_path = file.path(output_dir, "voom_plot.png")  # Return the path
   ))
 }

@@ -1,0 +1,11 @@
+
+
+processing file: RNAseq_report.Rmd
+Error in `run_rnaseq_analysis()`:
+! No file matched sample name: ConNosmk_1
+Backtrace:
+    ▆
+ 1. └─global run_rnaseq_analysis(report_params)
+
+Quitting from RNAseq_report.Rmd:91-100 [analysis]
+Execution halted

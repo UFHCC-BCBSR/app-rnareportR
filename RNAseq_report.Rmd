@@ -28,47 +28,85 @@ library(edgeR)
 library(qs)
 library(kableExtra)
 library(yaml)
-source("HRK_funcs.R")
+source("R/HRK_funcs.R")
 library(downloadthis)
 select <- dplyr::select
+#TEST=TRUE
 ```
 
 ```{r params}
-# Read the report parameters from the text file
 parse_params <- function(filepath) {
   lines <- readLines(filepath)
   param_list <- list()
-
+  
   for (line in lines) {
+    line <- trimws(line)
+    
+    # Skip empty lines and comments
+    if (line == "" || startsWith(line, "#")) {
+      next
+    }
+    
     if (grepl("^--", line)) {
-      parts <- strsplit(line, " ", fixed = TRUE)[[1]]
-      key <- gsub("^--", "", parts[1])
-      value <- paste(parts[-1], collapse = " ")
-      value <- gsub('^"|"$', '', value)  # Remove surrounding quotes
-
-      # Convert logical strings to actual logical values
-      if (tolower(value) == "true") {
-        value <- TRUE
-      } else if (tolower(value) == "false") {
-        value <- FALSE
+      space_pos <- regexpr("\\s", line)
+      
+      if (space_pos > 0) {
+        key <- gsub("^--", "", substr(line, 1, space_pos - 1))
+        
+        # NORMALIZE HYPHENS TO UNDERSCORES for consistency
+        key <- gsub("-", "_", key)
+        
+        value <- trimws(substr(line, space_pos + 1, nchar(line)))
+        
+        # Remove surrounding quotes
+        if ((startsWith(value, '"') && endsWith(value, '"')) ||
+            (startsWith(value, "'") && endsWith(value, "'"))) {
+          value <- substr(value, 2, nchar(value) - 1)
+        }
+        
+        # Convert logical strings
+        if (tolower(value) == "true") {
+          value <- TRUE
+        } else if (tolower(value) == "false") {
+          value <- FALSE
+        }
+        
+        param_list[[key]] <- value
       }
-
-      param_list[[key]] <- value
     }
   }
-
+  
   return(param_list)
 }
 
-#TEST=FALSE
+# Determine which params file to use
 if (!exists("TEST") || is.null(TEST)) {
   # Production mode: read from passed-in params
-  report_params <- parse_params(params$params_file)
+  if (!is.null(params$params_file) && file.exists(params$params_file)) {
+    report_params <- parse_params(params$params_file)
+    
+    # CRITICAL: Merge with directly-passed params, giving them priority
+    # This handles report_title and any other params passed via sbatch
+    for (param_name in names(params)) {
+      if (param_name != "params_file") {  # Don't overwrite the file path itself
+        report_params[[param_name]] <- params[[param_name]]
+      }
+    }
+    
+  } else {
+    stop("No valid params file provided via params$params_file")
+  }
 } else {
   # Testing mode
-  report_params <- parse_params("/blue/cancercenter-dept/PIPELINES/REPORTING/rmarkdown_report_module/param_files/Sharma_params.txt")
+  report_params <- parse_params("/blue/cancercenter-dept/hkates/Tests/rnareport/output/app-test-3_params.txt")
 }
 
+# DEBUG: Print key params to verify loading
+cat("DEBUG: annotation_db =", report_params$annotation_db, "\n")
+cat("DEBUG: report_title =", report_params$report_title, "\n")
+cat("DEBUG: output_path =", ifelse(!is.null(report_params$output_path), 
+                                    report_params$output_path, 
+                                    "NOT SET"), "\n")
 ```
 
 ```{r analysis}
@@ -419,8 +457,7 @@ library(grid)
 library(png)
 
 # Load the PNG plot as a raster image
-img <- rasterGrob(readPNG(paste0(report_params$out_dir, "/voom_plot.png")), interpolate = TRUE)
-
+img <- rasterGrob(readPNG(voom_plot_path), interpolate = TRUE)
 # Open a graphics device, plot `plotSA()`, then capture it
 tmp <- tempfile(fileext = ".png")
 invisible(png(tmp, width = 600, height = 600, res = 150))  # Open a temporary PNG device
