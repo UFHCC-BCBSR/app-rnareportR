@@ -72,13 +72,14 @@ if (!exists("TEST") || is.null(TEST)) {
 ```
 
 ```{r analysis}
-invisible(
-  suppressMessages(
-    suppressWarnings(
-      capture.output(source("analysis.R"))
-    )
-  )
-)
+# Source the function definition
+source("R/analysis.R")
+
+# Run the analysis and extract results
+analysis_results <- run_rnaseq_analysis(report_params)
+
+# Unpack results into global environment for backwards compatibility
+list2env(analysis_results, envir = .GlobalEnv)
 ```
 
 # Project Summary
