@@ -1,105 +1,158 @@
-# Local Nextflow Module: `rmarkdown_report`
+# RNA-seq Reporter Differential Expression Analysis Pipeline
 
-This module renders a custom RMarkdown report (`RNAseq_report.Rmd`) using provided analysis code and parameter files. It's designed to run as a local module within a Nextflow pipeline, such as `nf-core/rnaseq`.
+A comprehensive Shiny-based workflow for configuring and executing differential expression analysis on RNA-seq data with automated report generation on HiPerGator.
 
 ---
 
-##  Included Files
+## Overview
+
+This pipeline provides
+
+* **Interactive Shiny app** for parameter configuration
+* **Three DE methods** DESeq2, edgeR GLM, or limma-voom
+* **Flexible gene filtering** with edgeR's filterByExpr
+* **Batch effect correction** (optional)
+* **Automated HTML reports** with visualizations and enrichment analysis
+* **SLURM integration** for HPC execution
+
+---
+
+## Directory Structure
 
 ```
-├── RNAseq_report.Rmd    # Main RMarkdown report template
-├── analysis.R           # Custom analysis code
-├── HRK_funcs.R          # Custom utility functions
-.
-├── CX_lung_report_params.txt # Example report params file
-├── modules
-│   └── local
-│       └── rmarkdown_report
-│           ├── analysis.R # Custom analysis code
-│           ├── HRK_funcs.R # Custom utility functions
-│           ├── main.nf # Nextflow process for rendering report
-│           └── RNAseq_report.Rmd # Main RMarkdown report template
-├── test_rmarkdown.nf # A minimal Nextflow script to run the local RMarkdown module.
-└── test_rnaseqreport.bash # Bash script to run the module using the test Nextflow workflow.
+rnareport/
+├── app.R                           # Shiny app for parameter configuration
+├── render-rnaseq-report.sbatch     # SLURM submission script
+├── RNAseq_report.Rmd               # Main report template
+├── R/
+│   ├── analysis.R                  # Main analysis orchestration
+│   ├── run-DE.R                    # DE analysis functions (DESeq2/edgeR/limma)
+│   ├── filter-genes.R              # Gene filtering functions
+│   ├── HRK_funcs.R                 # Plotting and enrichment functions
+│   └── helper-funcs.R              # Utility functions
+├── output/                         # Generated params files and reports
+└── logs/                           # SLURM job logs
+```
 
 ---
 
-##  How to Run the Module Standalone
+## Quick Start
 
-### 1. Create a test script (e.g. `test_rnaseqreport.bash`)
+### 1. Launch the Shiny App
 
 ```bash
-module load nextflow
-module load apptainer
-
-nextflow run test_rmarkdown.nf \
-  -profile standard \
-  --sample_id CX_lung \
-  --params_file /full/path/to/CX_lung_report_params.txt \
-  --rmarkdown_container /full/path/to/rmarkdown_report.sif \
-  --rmarkdown_outdir results/reports
+module load R/4.5
+rserver
 ```
 
->  Replace paths with your actual file locations.
+Then access via SSH tunnel or HiPerGator web interface.
+
+### 2. Configure Analysis Parameters
+
+In the Shiny app
+
+* Login with your HiPerGator group credentials
+* Browse or upload
+  * RSEM directory (with .genes.results files)
+  * Sample metadata CSV
+  * Contrasts file (txt with Group1-Group2 format)
+* Set analysis parameters
+  * DE Method limma-voom (default), DESeq2, or edgeR GLM
+  * Filtering min count (default 10), min proportion (default 0.7)
+  * Grouping variable Column name in metadata (e.g., "Condition")
+  * Batch variable Optional batch correction variable
+  * CPU cores Number of cores for enrichment analysis (default 4)
+* Validate and Generate params.txt
+* Submit Job directly from the app
+
+### 3. Manual Job Submission (Alternative)
+
+```bash
+sbatch render-rnaseq-report.sbatch 
+  --params-file output/my_project_params.txt 
+  --title "My RNA-seq Analysis" 
+  --output-dir /blue/your-group/results 
+  --email your.email@ufl.edu
+```
 
 ---
 
-### 2. Create a minimal `test_rmarkdown.nf`
+## Analysis Methods
 
-```nextflow
-nextflow.enable.dsl=2
+### Differential Expression Options
 
-include { RENDER_RNASEQ_REPORT } from './modules/local/rmarkdown_report'
+| Method | Best For | Key Features |
+|--------|----------|--------------|
+| limma-voom | Complex designs, multiple comparisons | Fast, flexible, good power |
+| DESeq2 | Small sample sizes (<6 per group) | Conservative, robust, shrinkage |
+| edgeR GLM | Very small samples (<4 per group) | Exact test, memory efficient |
 
-workflow {
-  RENDER_RNASEQ_REPORT(
-    RNAseq_report       = file("modules/local/rmarkdown_report/RNAseq_report.Rmd"),
-    HRK_funcs           = file("modules/local/rmarkdown_report/HRK_funcs.R"),
-    analysis            = file("modules/local/rmarkdown_report/analysis.R"),
-    params_file         = file(params.params_file),
-    rmarkdown_container = params.rmarkdown_container,
-    sample_id           = params.sample_id,
-    rmarkdown_outdir    = params.rmarkdown_outdir
-  )
-}
-```
+### Gene Filtering
 
----
+Uses edgeR's filterByExpr with configurable parameters
 
-##  Container Notes
+* min_count Minimum count per sample (default 10)
+* min_prop Minimum proportion of samples expressing gene (default 0.7)
 
-This module uses a custom Singularity container (`.sif`) that includes `downloadthis` and many CRAN/Bioconductor packages.
+Automatically adjusts thresholds based on sample size and group structure.
 
-**The container is too large for the remote repo. It is stored in:**
+### Batch Correction
 
-```
-/blue/cancercenter-dept/PIPELINES/rmarkdown_report_module/
-```
+Optional batch correction using limma's duplicateCorrelation and removeBatchEffect
 
-Then reference it in your `test_rnaseqreport.bash` or main pipeline.
+* Specify batch variable in Shiny app
+* Applied before differential expression testing
+* PCA plots show before/after correction
 
 ---
 
-##  Parameters
+## Input Files
 
-| Parameter              | Description                          |
-|------------------------|--------------------------------------|
-| `sample_id`            | Sample name for output HTML file     |
-| `params_file`          | Plaintext file of parameters          |
-| `rmarkdown_container`  | Path to `.sif` container file         |
-| `rmarkdown_outdir`     | Output directory for rendered report |
+### 1. RSEM Directory
+
+Directory containing STAR-RSEM output files
+
+```
+rsem_dir/
+├── Sample1.genes.results
+├── Sample2.genes.results
+└── Sample3.genes.results
+```
+
+### 2. Sample Metadata (CSV)
+
+```
+SampleName,Condition,Batch
+Sample1,Control,Batch1
+Sample2,Control,Batch1
+Sample3,Treatment,Batch2
+Sample4,Treatment,Batch2
+```
+
+* First column Sample names (must match RSEM filenames)
+* Additional columns Experimental variables
+
+### 3. Contrasts File (TXT)
+
+```
+Treatment-Control
+DrugA-Vehicle
+DrugB-Vehicle
+```
+
+* Each line defines one comparison (format Group2-Group1)
 
 ---
 
-## Usage in Pipeline
+## Output
 
-To integrate into a full Nextflow project (like `nf-core/rnaseq`), place this module in:
+### Generated Files
 
 ```
-modules/local/rmarkdown_report/
+output_directory/
+├── ProjectID_params.txt          # Parameters used
+├── ProjectID.Report.html         # Main HTML report
+├── voom_plot.png                 # Voom mean-variance plot (limma only)
+├── SampleData.csv                # Processed metadata
+└── contrast.txt                  # Contrasts tested
 ```
-
-Then call it from any workflow with the appropriate inputs.
-
----
-
