@@ -66,18 +66,28 @@ ui <- fluidPage(
       }
       .validation-success { background-color: #d4edda; border: 1px solid #c3e6cb; color: #155724; }
       .validation-error { background-color: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; }
+      .info-box {
+        background-color: #d1ecf1;
+        border: 1px solid #bee5eb;
+        border-radius: 4px;
+        padding: 10px;
+        margin: 10px 0;
+        font-size: 13px;
+        color: #0c5460;
+      }
     "))
   ),
   
   div(class = "title-section",
       h1("RNA-seq Reporter", style = "margin: 0; font-size: 48px; font-weight: 300;"),
-      p("Configure and run differential expression analysis reports", 
+      p("Configure and run differential expression analysis reports",
         style = "margin: 10px 0 0 0; font-size: 14px; opacity: 0.8;")
   ),
+  
   # Load Existing Parameters section
   div(class = "step-section",
       h3("Load Existing Parameters (Optional)", style = "text-align: center; margin-bottom: 20px;"),
-      p("Start from an existing params.txt file to make modifications:", 
+      p("Start from an existing params.txt file to make modifications:",
         style = "text-align: center; color: #6c757d;"),
       
       # Option 1: Browse for existing params file
@@ -85,9 +95,9 @@ ui <- fluidPage(
           h5("Browse HiPerGator for Existing params.txt"),
           conditionalPanel(
             condition = "output.authenticated",
-            textInput("custom_path_existing_params", "Directory Path:", value = "", 
+            textInput("custom_path_existing_params", "Directory Path:", value = "",
                       placeholder = "Enter path relative to volume..."),
-            shinyFilesButton("browse_existing_params", "Browse Existing params.txt", 
+            shinyFilesButton("browse_existing_params", "Browse Existing params.txt",
                              "Select params file", class = "btn-secondary", multiple = FALSE),
             uiOutput("selected_existing_params_file")
           ),
@@ -108,7 +118,7 @@ ui <- fluidPage(
       
       # Load button and status
       div(style = "text-align: center; margin-top: 20px;",
-          actionButton("load_existing_params", "Load Parameters", 
+          actionButton("load_existing_params", "Load Parameters",
                        class = "btn-warning btn-lg", disabled = TRUE),
           br(), br(),
           uiOutput("params_load_status")
@@ -148,23 +158,23 @@ ui <- fluidPage(
           h4("Basic Configuration"),
           fluidRow(
             column(6, textInput("sample_id", "Sample/Project ID", placeholder = "CX_liver_test")),
-            column(6, textInput("report_title", "Report Title", 
+            column(6, textInput("report_title", "Report Title",
                                 value = "RNA-seq Differential Expression Report"))
           ),
           fluidRow(
-            column(4, selectInput("organism", "Organism", 
-                                  choices = list("Mouse (mmu)" = "mmu", "Human (hsa)" = "hsa"), 
+            column(4, selectInput("organism", "Organism",
+                                  choices = list("Mouse (mmu)" = "mmu", "Human (hsa)" = "hsa"),
                                   selected = "mmu")),
-            column(4, selectInput("annotation_db", "Annotation Database", 
-                                  choices = list("org.Mm.eg.db" = "org.Mm.eg.db", 
-                                                 "org.Hs.eg.db" = "org.Hs.eg.db"), 
+            column(4, selectInput("annotation_db", "Annotation Database",
+                                  choices = list("org.Mm.eg.db" = "org.Mm.eg.db",
+                                                 "org.Hs.eg.db" = "org.Hs.eg.db"),
                                   selected = "org.Mm.eg.db")),
-            column(4, textInput("hipergator_group", "HiPerGator Group", 
+            column(4, textInput("hipergator_group", "HiPerGator Group",
                                 placeholder = "e.g., cancercenter-dept"))
           ),
-          textInput("output_path", "Output Path", 
+          textInput("output_path", "Output Path",
                     placeholder = "/blue/your-group/path/to/output"),
-          textInput("user_email", "Email Address", 
+          textInput("user_email", "Email Address",
                     placeholder = "your.email@ufl.edu")
       ),
       
@@ -173,15 +183,14 @@ ui <- fluidPage(
           h4("RNA-seq Data Files"),
           
           # RSEM Directory
-          tags$p(tags$strong("RSEM Directory"), 
+          tags$p(tags$strong("RSEM Directory"),
                  " - Directory containing .genes.results files from STAR RSEM"),
           conditionalPanel(
             condition = "output.authenticated",
-            shinyDirButton("browse_rsem_dir", "Browse RSEM Directory", 
+            shinyDirButton("browse_rsem_dir", "Browse RSEM Directory",
                            "Select directory", class = "btn-info"),
             uiOutput("selected_rsem_dir")
           ),
-          
           tags$br(),
           
           # Sample Sheet
@@ -190,49 +199,102 @@ ui <- fluidPage(
             condition = "output.authenticated",
             fluidRow(
               column(6,
-                     shinyFilesButton("browse_sample_sheet", "Browse Sample Sheet", 
+                     shinyFilesButton("browse_sample_sheet", "Browse Sample Sheet",
                                       "Select CSV file", class = "btn-info", multiple = FALSE),
                      uiOutput("selected_sample_sheet")
               ),
               column(6,
-                     downloadButton("download_sample_sheet", "Download Selected File", 
+                     downloadButton("download_sample_sheet", "Download Selected File",
                                     class = "btn-secondary")
               )
             )
           ),
           fileInput("upload_sample_sheet", "OR Upload Sample Sheet", accept = ".csv"),
-          
           tags$br(),
           
           # Contrasts File
           tags$p(tags$strong("Contrasts File"), " - Text file listing comparisons"),
           conditionalPanel(
             condition = "output.authenticated",
-            shinyFilesButton("browse_contrasts", "Browse Contrasts File", 
+            shinyFilesButton("browse_contrasts", "Browse Contrasts File",
                              "Select file", class = "btn-info", multiple = FALSE),
             uiOutput("selected_contrasts")
           ),
           fileInput("upload_contrasts", "OR Upload Contrasts File", accept = ".txt")
       ),
       
-      # Analysis Parameters
+      # Analysis Parameters - UPDATED SECTION
       div(class = "param-group",
           h4("Analysis Parameters"),
+          
+          # Differential Expression Method
+          div(class = "info-box",
+              tags$i(class = "fa fa-info-circle"),
+              " Select the statistical method for differential expression analysis"
+          ),
+          selectInput("DE_tool", "Differential Expression Method",
+                      choices = list(
+                        "limma-voom (default)" = "limma_voom",
+                        "DESeq2" = "deseq2",
+                        "edgeR GLM" = "edger_GLM"
+                      ),
+                      selected = "limma_voom"),
+          
+          tags$br(),
+          
+          # Grouping and Batch Variables
           fluidRow(
-            column(6, textInput("group_var", "Grouping Variable", 
+            column(6, textInput("group_var", "Grouping Variable",
                                 value = "Condition",
                                 placeholder = "Column name in sample sheet")),
-            column(6, textInput("batch_var", "Batch Variable (optional)", 
+            column(6, textInput("batch_var", "Batch Variable (optional)",
                                 value = "",
                                 placeholder = "Leave empty if no batch correction"))
           ),
-          checkboxInput("filter_samples", "Filter low-quality samples", value = FALSE)
+          
+          tags$br(),
+          
+          # Gene Filtering Parameters
+          div(class = "info-box",
+              tags$i(class = "fa fa-filter"),
+              " Gene filtering uses edgeR's filterByExpr function with these parameters"
+          ),
+          h5("Gene Filtering Parameters", style = "margin-top: 15px;"),
+          fluidRow(
+            column(6,
+                   numericInput("filter_min_count", "Minimum count per sample",
+                                value = 10, min = 1, max = 100, step = 1)
+            ),
+            column(6,
+                   numericInput("filter_min_prop", "Minimum sample proportion",
+                                value = 0.7, min = 0.1, max = 1.0, step = 0.1)
+            )
+          ),
+          
+          tags$br(),
+          
+          # NEW: CPU cores for enrichment
+          h5("Performance Settings", style = "margin-top: 15px;"),
+          div(class = "info-box",
+              tags$i(class = "fa fa-microchip"),
+              " Number of CPU cores for GO/KEGG enrichment analysis (must match your SLURM allocation)"
+          ),
+          fluidRow(
+            column(6,
+                   numericInput("n_cores", "CPU cores",
+                                value = 4, min = 1, max = 16, step = 1)
+            ),
+            column(6,
+                   checkboxInput("filter_samples", "Filter low-quality samples", value = FALSE)
+            )
+          )
       )
   ),
   
   # Report Metadata (Optional)
   div(class = "step-section",
       h2("Report Metadata (Optional)", style = "text-align: center; margin-bottom: 30px;"),
+      
       div(class = "param-group",
           h4("Project Information"),
           fluidRow(
@@ -245,24 +307,26 @@ ui <- fluidPage(
           ),
           textInput("Project_Title", "Project Title", placeholder = "RNA-seq analysis of...")
       ),
+      
       div(class = "param-group",
           h4("Study Details"),
           textAreaInput("Study_Summary", "Study Summary",
                         placeholder = "Brief description of the study objectives...",
                         rows = 3),
           fluidRow(
-            column(6, textInput("Sample_Types", "Sample Type(s)", 
+            column(6, textInput("Sample_Types", "Sample Type(s)",
                                 placeholder = "Cell lines, tissue samples, etc.")),
-            column(6, textInput("Analysis_Goals", "Analysis Goal(s)", 
+            column(6, textInput("Analysis_Goals", "Analysis Goal(s)",
                                 placeholder = "DE analysis, pathway analysis, etc."))
           )
       ),
+      
       div(class = "param-group",
           h4("Report Credits"),
           fluidRow(
-            column(6, textInput("Report_Prepared_By", "Report Prepared By", 
+            column(6, textInput("Report_Prepared_By", "Report Prepared By",
                                 placeholder = "Analyst Name")),
-            column(6, textInput("Report_Reviewed_By", "Report Reviewed By", 
+            column(6, textInput("Report_Reviewed_By", "Report Reviewed By",
                                 placeholder = "Reviewer Name"))
           )
       )
@@ -271,16 +335,17 @@ ui <- fluidPage(
   # Validation and Generation
   div(class = "step-section",
       h2("Generate Parameters & Submit", style = "text-align: center; margin-bottom: 30px;"),
+      
       div(style = "text-align: center;",
           actionButton("validate_params", "Validate Parameters", class = "btn-secondary btn-lg"),
           br(), br(),
-          actionButton("generate_params", "Generate params.txt", class = "btn-success btn-lg", 
+          actionButton("generate_params", "Generate params.txt", class = "btn-success btn-lg",
                        disabled = TRUE),
           br(), br(),
-          downloadButton("download_params", "Download params.txt", class = "btn-info btn-lg", 
+          downloadButton("download_params", "Download params.txt", class = "btn-info btn-lg",
                          disabled = TRUE),
           br(), br(),
-          actionButton("submit_job", "Submit Analysis Job", class = "btn-primary btn-lg", 
+          actionButton("submit_job", "Submit Analysis Job", class = "btn-primary btn-lg",
                        disabled = TRUE)
       ),
       br(),
@@ -294,6 +359,7 @@ ui <- fluidPage(
 
 # Server
 server <- function(input, output, session) {
+  
   values <- reactiveValues(
     authenticated = FALSE,
     current_group = NULL,
@@ -301,7 +367,7 @@ server <- function(input, output, session) {
     params_valid = FALSE,
     params_generated = FALSE,
     validation_messages = c(),
-    existing_params_file = NULL, 
+    existing_params_file = NULL,
     params_loaded = FALSE         
   )
   
@@ -338,22 +404,22 @@ server <- function(input, output, session) {
     
     if (input$group_name %in% names(group_passwords) &&
         input$group_password == group_passwords[[input$group_name]]) {
+      
       values$authenticated <- TRUE
       values$current_group <- input$group_name
       
       # Set up file browser roots
       group_path <- paste0("/blue/", values$current_group)
-      
       if (dir.exists(group_path)) {
         group_volumes <- setNames(group_path, values$current_group)
         
         # Initialize file browsers
         shinyDirChoose(input, "browse_rsem_dir", roots = group_volumes, session = session)
-        shinyFileChoose(input, "browse_sample_sheet", roots = group_volumes, 
+        shinyFileChoose(input, "browse_sample_sheet", roots = group_volumes,
                         session = session, filetypes = c("", "csv"))
-        shinyFileChoose(input, "browse_contrasts", roots = group_volumes, 
+        shinyFileChoose(input, "browse_contrasts", roots = group_volumes,
                         session = session, filetypes = c("", "txt"))
-        shinyFileChoose(input, "browse_existing_params", roots = group_volumes, 
+        shinyFileChoose(input, "browse_existing_params", roots = group_volumes,
                         session = session, filetypes = c("", "txt"))
       }
       
@@ -416,13 +482,13 @@ server <- function(input, output, session) {
       group_volumes <- setNames(group_path, values$current_group)
       
       tryCatch({
-        if (!is.null(input$browse_existing_params) && length(input$browse_existing_params) > 0 && 
+        if (!is.null(input$browse_existing_params) && length(input$browse_existing_params) > 0 &&
             !is.integer(input$browse_existing_params)) {
           selected_files <- parseFilePaths(group_volumes, input$browse_existing_params)
           if (!is.null(selected_files) && nrow(selected_files) > 0) {
             values$existing_params_file <- selected_files$datapath[1]
             shinyjs::enable("load_existing_params")
-            showNotification("Params file selected - click Load Parameters to populate fields", 
+            showNotification("Params file selected - click Load Parameters to populate fields",
                              type = "message")
           }
         }
@@ -443,7 +509,7 @@ server <- function(input, output, session) {
       
       values$existing_params_file <- permanent_path
       shinyjs::enable("load_existing_params")
-      showNotification("Params file uploaded - click Load Parameters to populate fields", 
+      showNotification("Params file uploaded - click Load Parameters to populate fields",
                        type = "message")
     }
   })
@@ -491,12 +557,31 @@ server <- function(input, output, session) {
       if ("rsem_dir" %in% names(params)) {
         values$selected_files$rsem_dir <- params$rsem_dir
       }
+      
       if ("group_var" %in% names(params)) {
         updateTextInput(session, "group_var", value = params$group_var)
       }
+      
       if ("batch_var" %in% names(params)) {
         updateTextInput(session, "batch_var", value = params$batch_var)
       }
+      
+      # NEW: Load DE tool parameter
+      if ("DE_tool" %in% names(params)) {
+        updateSelectInput(session, "DE_tool", selected = params$DE_tool)
+      }
+      
+      # NEW: Load filtering parameters
+      if ("filter_min_count" %in% names(params)) {
+        updateNumericInput(session, "filter_min_count", value = as.numeric(params$filter_min_count))
+      }
+      if ("filter_min_prop" %in% names(params)) {
+        updateNumericInput(session, "filter_min_prop", value = as.numeric(params$filter_min_prop))
+      }
+      if ("n_cores" %in% names(params)) {
+        updateNumericInput(session, "n_cores", value = as.numeric(params$n_cores))
+      }
+      
       if ("filter_samples" %in% names(params)) {
         updateCheckboxInput(session, "filter_samples", value = TRUE)
       }
@@ -505,6 +590,7 @@ server <- function(input, output, session) {
       if ("sample_data" %in% names(params)) {
         values$selected_files$sample_sheet <- params$sample_data
       }
+      
       if ("contrasts" %in% names(params)) {
         if (file.exists(params$contrasts)) {
           values$selected_files$contrasts <- params$contrasts
@@ -601,7 +687,7 @@ server <- function(input, output, session) {
           selected_dir <- parseDirPath(group_volumes, input$browse_rsem_dir)
           if (length(selected_dir) > 0) {
             values$selected_files$rsem_dir <- selected_dir
-            showNotification(paste("Selected RSEM directory:", basename(selected_dir)), 
+            showNotification(paste("Selected RSEM directory:", basename(selected_dir)),
                              type = "message")
           }
         }
@@ -617,12 +703,12 @@ server <- function(input, output, session) {
       group_volumes <- setNames(group_path, values$current_group)
       
       tryCatch({
-        if (!is.null(input$browse_sample_sheet) && length(input$browse_sample_sheet) > 0 && 
+        if (!is.null(input$browse_sample_sheet) && length(input$browse_sample_sheet) > 0 &&
             !is.integer(input$browse_sample_sheet)) {
           selected_files <- parseFilePaths(group_volumes, input$browse_sample_sheet)
           if (!is.null(selected_files) && nrow(selected_files) > 0) {
             values$selected_files$sample_sheet <- selected_files$datapath[1]
-            showNotification(paste("Selected:", basename(selected_files$name[1])), 
+            showNotification(paste("Selected:", basename(selected_files$name[1])),
                              type = "message")
           }
         }
@@ -638,12 +724,12 @@ server <- function(input, output, session) {
       group_volumes <- setNames(group_path, values$current_group)
       
       tryCatch({
-        if (!is.null(input$browse_contrasts) && length(input$browse_contrasts) > 0 && 
+        if (!is.null(input$browse_contrasts) && length(input$browse_contrasts) > 0 &&
             !is.integer(input$browse_contrasts)) {
           selected_files <- parseFilePaths(group_volumes, input$browse_contrasts)
           if (!is.null(selected_files) && nrow(selected_files) > 0) {
             values$selected_files$contrasts <- selected_files$datapath[1]
-            showNotification(paste("Selected:", basename(selected_files$name[1])), 
+            showNotification(paste("Selected:", basename(selected_files$name[1])),
                              type = "message")
           }
         }
@@ -715,7 +801,6 @@ server <- function(input, output, session) {
       
       output_file_path <- file.path(output_path, input$upload_sample_sheet$name)
       file.copy(input$upload_sample_sheet$datapath, output_file_path, overwrite = TRUE)
-      
       values$selected_files$sample_sheet <- output_file_path
       showNotification(paste("File uploaded to:", output_file_path), type = "message")
     }
@@ -736,7 +821,6 @@ server <- function(input, output, session) {
       
       output_file_path <- file.path(output_path, input$upload_contrasts$name)
       file.copy(input$upload_contrasts$datapath, output_file_path, overwrite = TRUE)
-      
       values$selected_files$contrasts <- output_file_path
       showNotification(paste("File uploaded to:", output_file_path), type = "message")
     }
@@ -750,19 +834,15 @@ server <- function(input, output, session) {
     if (is.null(input$sample_id) || input$sample_id == "") {
       messages <- c(messages, "❌ Sample/Project ID is required")
     }
-    
     if (is.null(input$hipergator_group) || input$hipergator_group == "") {
       messages <- c(messages, "❌ HiPerGator Group is required")
     }
-    
     if (is.null(input$output_path) || input$output_path == "") {
       messages <- c(messages, "❌ Output path is required")
     }
-    
     if (is.null(input$user_email) || input$user_email == "") {
       messages <- c(messages, "❌ User email is required")
     }
-    
     if (is.null(input$group_var) || input$group_var == "") {
       messages <- c(messages, "❌ Grouping variable is required")
     }
@@ -771,11 +851,9 @@ server <- function(input, output, session) {
     if (is.null(values$selected_files$rsem_dir)) {
       messages <- c(messages, "❌ RSEM directory is required")
     }
-    
     if (is.null(values$selected_files$sample_sheet)) {
       messages <- c(messages, "❌ Sample sheet is required")
     }
-    
     if (is.null(values$selected_files$contrasts)) {
       messages <- c(messages, "❌ Contrasts file is required")
     }
@@ -787,7 +865,6 @@ server <- function(input, output, session) {
     
     values$validation_messages <- messages
     values$params_valid <- !any(grepl("^❌", messages))
-    
     return(messages)
   }
   
@@ -813,7 +890,7 @@ server <- function(input, output, session) {
     }
   })
   
-  # Generate params.txt
+  # Generate params.txt - UPDATED FUNCTION
   generate_params_content <- function() {
     lines <- c()
     
@@ -828,6 +905,14 @@ server <- function(input, output, session) {
       lines <- c(lines, paste("--batch_var", shQuote(input$batch_var)))
     }
     
+    # NEW: DE tool parameter
+    lines <- c(lines, paste("--DE_tool", shQuote(input$DE_tool)))
+    
+    # NEW: Filtering parameters
+    lines <- c(lines, paste("--filter_min_count", input$filter_min_count))
+    lines <- c(lines, paste("--filter_min_prop", input$filter_min_prop))
+    lines <- c(lines, paste("--n_cores", input$n_cores))
+
     # Filter samples flag
     if (input$filter_samples) {
       lines <- c(lines, "--filter_samples")
@@ -902,8 +987,9 @@ server <- function(input, output, session) {
       shinyjs::enable("submit_job")
       shinyjs::enable("download_params")
       
-      showNotification(paste("Parameters file saved to HiPerGator:", params_file), 
+      showNotification(paste("Parameters file saved to HiPerGator:", params_file),
                        type = "message")
+      
     }, error = function(e) {
       showNotification(paste("Error generating params file:", e$message), type = "error")
     })
@@ -912,7 +998,7 @@ server <- function(input, output, session) {
   # Display params preview
   output$params_preview <- renderText({
     if (values$params_generated && !is.null(values$params_file_path)) {
-      paste("Generated params.txt:\n\n", 
+      paste("Generated params.txt:\n\n",
             paste(readLines(values$params_file_path), collapse = "\n"))
     } else {
       "Click 'Validate Parameters' then 'Generate params.txt' to see preview"
@@ -949,7 +1035,6 @@ server <- function(input, output, session) {
     tryCatch({
       # Construct sbatch command
       sbatch_script <- "render-rnaseq-report.sbatch"
-      
       sbatch_args <- c(
         sbatch_script,
         "--params-file", values$params_file_path,
@@ -981,15 +1066,15 @@ server <- function(input, output, session) {
           div(style = "background-color: #d4edda; padding: 15px; border-radius: 5px; margin-top: 15px;",
               tags$h4("✅ Job Submitted Successfully!", style = "color: #155724; margin-top: 0;"),
               tags$p(strong("Job ID: "), job_id),
+              tags$p(strong("DE Method: "), input$DE_tool),
               tags$p(strong("Command: "), tags$code(full_command)),
               tags$p(strong("Parameters file: "), tags$code(values$params_file_path)),
-              tags$p(strong("Expected output: "), 
+              tags$p(strong("Expected output: "),
                      tags$code(file.path(input$output_path, paste0(input$sample_id, "_Report.html")))),
               tags$p(strong("Check job status: "), tags$code(paste0("squeue -j ", job_id))),
               tags$p(strong("View logs: "), tags$code(paste0("tail -f logs/rnaseq-report_", job_id, ".log")))
           )
         })
-        
       } else {
         error_msg <- paste("SLURM submission failed:", paste(result, collapse = "\n"))
         

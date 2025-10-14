@@ -99,7 +99,16 @@ pandoc --version
 export RSTUDIO_PANDOC=$(which pandoc | xargs dirname)
 
 # Extract sample_id from params file
-SAMPLE_ID=$(grep "^--report_title" "$PARAMS_FILE" | cut -d'"' -f2 | sed 's/[^a-zA-Z0-9_-]/_/g')
+# Replace lines 76-80 with:
+# Extract sample_id from params file (this is the unique project identifier)
+SAMPLE_ID=$(grep "^--sample_id" "$PARAMS_FILE" | sed -E "s/^--sample_id[[:space:]]+['\"]?(.+)['\"]?$/\1/" | sed 's/[^a-zA-Z0-9_-]/_/g')
+if [[ -z "$SAMPLE_ID" ]]; then
+  # Fallback to report_title if sample_id not found
+  SAMPLE_ID=$(grep "^--report_title" "$PARAMS_FILE" | sed -E "s/^--report_title[[:space:]]+['\"]?(.+)['\"]?$/\1/" | sed 's/[^a-zA-Z0-9_-]/_/g')
+  if [[ -z "$SAMPLE_ID" ]]; then
+    SAMPLE_ID="RNAseq_Report"
+  fi
+fi
 if [[ -z "$SAMPLE_ID" ]]; then
   SAMPLE_ID="RNAseq_Report"
 fi

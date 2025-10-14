@@ -6,19 +6,32 @@ library(plotly)
 library(heatmaply)
 library(org.Mm.eg.db)
 
-generate_enrichment_plot <- function(gene_lists, de_results_df, universe_entrez, ont_category, significance_threshold = 0.05, top_n = 10, annotation_db) {
+generate_enrichment_plot <- function(gene_lists, de_results_df, universe_entrez, ont_category, 
+                                     significance_threshold = 0.05, top_n = 10, annotation_db) {
+  
+  library(BiocParallel)
+  
+  # Get n_cores from report_params if available, otherwise default to 1
+  n_cores <- if (exists("report_params") && "n_cores" %in% names(report_params)) {
+    as.numeric(report_params$n_cores)
+  } else {
+    1
+  }
+  
   pvalue_cutoff <- if (isTRUE(report_params$download_nonsig_enrich)) 1 else significance_threshold
-  annotation_obj <- get(annotation_db, envir = asNamespace(annotation_db)) 
+  annotation_obj <- get(annotation_db, envir = asNamespace(annotation_db))
   names(gene_lists) <- gsub("efit_|_results_df", "", names(gene_lists))
-  # Ensure gene lists are named and define contrast order
+  
   if (is.null(names(gene_lists))) stop("Each gene list must be named!")
   contrast_order <- names(gene_lists)
   
-  # Convert DE results dataframe to a lookup table for mapping Entrez IDs
+  # PRE-COMPUTE ENTREZ IDs for ALL DE results (do this ONCE)
   de_results_df <- de_results_df %>%
-    mutate(ENTREZID = mapIds(annotation_obj, keys = ensembleID, column = "ENTREZID", keytype = "ENSEMBL", multiVals = "first"))
+    mutate(ENTREZID = mapIds(annotation_obj, keys = ensembleID, 
+                             column = "ENTREZID", keytype = "ENSEMBL", multiVals = "first"))
   
-  # Run GO enrichment using compareCluster()
+  # PARALLELIZED: Run GO enrichment using compareCluster() with BiocParallel
+  message(sprintf("Running GO enrichment with %d cores...", n_cores))
   formula_res <- compareCluster(
     Entrez ~ Contrast,
     data = bind_rows(lapply(contrast_order, function(contrast) {
@@ -32,149 +45,147 @@ generate_enrichment_plot <- function(gene_lists, de_results_df, universe_entrez,
     OrgDb = annotation_obj,
     keyType = "ENTREZID",
     ont = ont_category,
-    pvalueCutoff = pvalue_cutoff
+    pvalueCutoff = pvalue_cutoff,
   )
   
   # Handle no results case
   if (is.null(formula_res) || nrow(formula_res@compareClusterResult) == 0) {
-    formula_res <- new("compareClusterResult",
-                       compareClusterResult = data.frame(
-                         Cluster = factor(),
-                         ID = character(),
-                         Description = character(),
-                         GeneRatio = character(),
-                         BgRatio = character(),
-                         pvalue = numeric(),
-                         p.adjust = numeric(),
-                         qvalue = numeric(),
-                         geneID = character(),
-                         Count = integer(),
-                         stringsAsFactors = FALSE
-                       ))
+    message_plot <- ggplot() +
+      annotate("text", x = 1, y = 1, 
+               label = paste0("No significant GO enrichment found\n(", ont_category, ")"), 
+               size = 6, hjust = 0.5) +
+      theme_void() +
+      ggtitle(paste("GO Term Enrichment (", ont_category, ")", sep = ""))
+    
+    return(list(
+      interactive_plot = ggplotly(message_plot),
+      static_plot = message_plot,
+      go_results = NULL
+    ))
   }
   
-  # Ensure clusters are ordered correctly
   formula_res@compareClusterResult$Cluster <- factor(
     formula_res@compareClusterResult$Cluster,
     levels = contrast_order
   )
   
-  # **Filter only by significance threshold FIRST (to preserve all significant results)**
   filtered_results <- subset(
     formula_res@compareClusterResult,
     p.adjust <= significance_threshold
   )
   
-  # Handle the special case: no enrichment found
   if (nrow(filtered_results) == 0) {
     message_plot <- ggplot() +
-      annotate("text", x = 1, y = 1, label = paste0("No significant GO enrichment found\n(", ont_category, ")"), size = 6, hjust = 0.5) +
+      annotate("text", x = 1, y = 1, 
+               label = paste0("No significant GO enrichment found\n(", ont_category, ")"), 
+               size = 6, hjust = 0.5) +
       theme_void() +
       ggtitle(paste("GO Term Enrichment (", ont_category, ")", sep = ""))
     
-    interactive_plot <- ggplotly(message_plot)
-    static_plot <- message_plot
-    
     return(list(
-      interactive_plot = interactive_plot,
-      static_plot = static_plot,
+      interactive_plot = ggplotly(message_plot),
+      static_plot = message_plot,
       go_results = NULL
     ))
   }
   
-  filtered_results$GeneSymbols <- sapply(seq_len(nrow(filtered_results)), function(i) {
-    gene_list <- filtered_results$geneID[i]
-    contrast_full <- as.character(filtered_results$Cluster[i]) 
-    
-    # Split into base contrast and direction
+  # PRE-BUILD lookup table: ENTREZID -> SYMBOL (do this ONCE)
+  unique_entrez <- unique(unlist(strsplit(filtered_results$geneID, "/")))
+  entrez_to_symbol <- setNames(
+    mapIds(annotation_obj, keys = unique_entrez, column = "SYMBOL", 
+           keytype = "ENTREZID", multiVals = "first"),
+    unique_entrez
+  )
+  
+  # Function to get gene symbols (uses pre-computed lookups)
+  get_gene_symbols <- function(i, results_df, de_df, entrez_symbol_map) {
+    gene_list <- results_df$geneID[i]
+    contrast_full <- as.character(results_df$Cluster[i])
     contrast_base <- sub("\\.(up|down)$", "", contrast_full)
     direction <- sub("^.*\\.", "", contrast_full)
-    
     entrez_ids <- unlist(strsplit(gene_list, "/"))
     
-    # Match to relevant DE results
-    de_sub <- de_results_df %>%
-      filter(grepl(contrast_base, contrast),  # Match the base name
+    de_sub <- de_df %>%
+      filter(grepl(contrast_base, contrast),
              ENTREZID %in% entrez_ids,
              case_when(
                direction == "up" ~ logFC > 0,
                direction == "down" ~ logFC < 0
              ))
     
-    # Sort by p-value and get top 20 Entrez IDs
-    top_genes <- de_sub %>%
+    top_entrez <- de_sub %>%
       arrange(adj.P.value) %>%
       slice_head(n = 20) %>%
       pull(ENTREZID)
     
-    gene_symbols <- mapIds(annotation_obj,
-                           keys = top_genes,
-                           column = "SYMBOL",
-                           keytype = "ENTREZID",
-                           multiVals = "first") %>%
-      na.omit()
+    gene_symbols <- na.omit(entrez_symbol_map[top_entrez])
     
     if (length(gene_symbols) > 0) {
       paste(gene_symbols, collapse = "<br>")
     } else {
       NA_character_
     }
-  })
+  }
   
-  # **Save full filtered results for downloading**
-  # Store all raw results before filtering (optional for download)
+  # PARALLELIZED: Get gene symbols using BiocParallel (works on HPC)
+  if (n_cores > 1) {
+    message(sprintf("Computing gene symbols with %d cores...", n_cores))
+    filtered_results$GeneSymbols <- bplapply(
+      seq_len(nrow(filtered_results)),
+      get_gene_symbols,
+      results_df = filtered_results,
+      de_df = de_results_df,
+      entrez_symbol_map = entrez_to_symbol,
+      BPPARAM = MulticoreParam(workers = n_cores)
+    ) %>% unlist()
+  } else {
+    filtered_results$GeneSymbols <- sapply(
+      seq_len(nrow(filtered_results)),
+      get_gene_symbols,
+      results_df = filtered_results,
+      de_df = de_results_df,
+      entrez_symbol_map = entrez_to_symbol
+    )
+  }
+  
   all_results <- formula_res@compareClusterResult
   
-  # Recalculate GeneSymbols for ALL terms if download_nonsig_enrich is TRUE
+  # If download_nonsig_enrich, compute symbols for ALL results
   if (isTRUE(report_params$download_nonsig_enrich)) {
-    all_results$GeneSymbols <- sapply(seq_len(nrow(all_results)), function(i) {
-      gene_list <- all_results$geneID[i]
-      contrast_full <- as.character(all_results$Cluster[i]) 
-      
-      contrast_base <- sub("\\.(up|down)$", "", contrast_full)
-      direction <- sub("^.*\\.", "", contrast_full)
-      
-      entrez_ids <- unlist(strsplit(gene_list, "/"))
-      
-      de_sub <- de_results_df %>%
-        filter(grepl(contrast_base, contrast),
-               ENTREZID %in% entrez_ids,
-               case_when(
-                 direction == "up" ~ logFC > 0,
-                 direction == "down" ~ logFC < 0
-               ))
-      
-      top_genes <- de_sub %>%
-        arrange(adj.P.value) %>%
-        slice_head(n = 20) %>%
-        pull(ENTREZID)
-      
-      gene_symbols <- mapIds(annotation_obj,
-                             keys = top_genes,
-                             column = "SYMBOL",
-                             keytype = "ENTREZID",
-                             multiVals = "first") %>%
-        na.omit()
-      
-      if (length(gene_symbols) > 0) {
-        paste(gene_symbols, collapse = "<br>")
-      } else {
-        NA_character_
-      }
-    })
+    all_unique_entrez <- unique(unlist(strsplit(all_results$geneID, "/")))
+    all_entrez_to_symbol <- setNames(
+      mapIds(annotation_obj, keys = all_unique_entrez, column = "SYMBOL", 
+             keytype = "ENTREZID", multiVals = "first"),
+      all_unique_entrez
+    )
+    
+    if (n_cores > 1) {
+      all_results$GeneSymbols <- bplapply(
+        seq_len(nrow(all_results)),
+        get_gene_symbols,
+        results_df = all_results,
+        de_df = de_results_df,
+        entrez_symbol_map = all_entrez_to_symbol,
+        BPPARAM = MulticoreParam(workers = n_cores)
+      ) %>% unlist()
+    } else {
+      all_results$GeneSymbols <- sapply(
+        seq_len(nrow(all_results)),
+        get_gene_symbols,
+        results_df = all_results,
+        de_df = de_results_df,
+        entrez_symbol_map = all_entrez_to_symbol
+      )
+    }
   }
   
-  # Choose download results based on flag
   download_go_results <- if (isTRUE(report_params$download_nonsig_enrich)) {
-    all_results %>%
-      select(Cluster, Description, p.adjust, GeneSymbols, everything())
+    all_results %>% select(Cluster, Description, p.adjust, GeneSymbols, everything())
   } else {
-    filtered_results %>%
-      select(Cluster, Description, p.adjust, GeneSymbols, everything())
+    filtered_results %>% select(Cluster, Description, p.adjust, GeneSymbols, everything())
   }
   
-  
-  # **Identify top `n` GO terms across all clusters for plotting**
+  # ... rest of plotting code unchanged ...
   top_GO_terms <- filtered_results %>%
     group_by(Cluster) %>%
     arrange(p.adjust, .by_group = TRUE) %>%
@@ -183,44 +194,38 @@ generate_enrichment_plot <- function(gene_lists, de_results_df, universe_entrez,
     pull(Description) %>%
     unique()
   
-  # **Filter for plotting (only keeping top GO terms)**
   formula_res@compareClusterResult <- filtered_results %>%
     filter(Description %in% top_GO_terms)
   
-  # Convert GeneRatio to numeric
   formula_res@compareClusterResult <- formula_res@compareClusterResult %>%
-    mutate(GeneRatio = sapply(strsplit(as.character(GeneRatio), "/"), function(x) as.numeric(x[1]) / as.numeric(x[2])))
+    mutate(GeneRatio = sapply(strsplit(as.character(GeneRatio), "/"), 
+                              function(x) as.numeric(x[1]) / as.numeric(x[2])))
   
-  # **Restore GO Term Ordering Using Hierarchical Clustering**
   reorder_GO_terms <- function(df) {
-    term_matrix <- table(df$Description, df$Cluster)  
-    
+    term_matrix <- table(df$Description, df$Cluster)
     if (nrow(term_matrix) > 1 && length(unique(df$Description)) > 1) {
-      term_dist <- dist(term_matrix, method = "binary")  
-      term_hclust <- hclust(term_dist, method = "ward.D2")  
+      term_dist <- dist(term_matrix, method = "binary")
+      term_hclust <- hclust(term_dist, method = "ward.D2")
       term_order <- rownames(term_matrix)[term_hclust$order]
     } else {
-      term_order <- unique(df$Description)  # Ensure a valid factor level
+      term_order <- unique(df$Description)
     }
-    
-    # Safely convert to a factor with the correct order
-    df$Description <- factor(df$Description, levels = term_order)  
+    df$Description <- factor(df$Description, levels = term_order)
     return(df)
   }
   
   formula_res@compareClusterResult <- reorder_GO_terms(formula_res@compareClusterResult)
   
-  # **Define GeneRatio bins**
-  bin_breaks <- c(0, 0.01, 0.05, 0.10, max(formula_res@compareClusterResult$GeneRatio, na.rm = TRUE) + 0.01)  
+  bin_breaks <- c(0, 0.01, 0.05, 0.10, 
+                  max(formula_res@compareClusterResult$GeneRatio, na.rm = TRUE) + 0.01)
   bin_labels <- c("≤0.01", "0.01 - 0.05", "0.05 - 0.10", "≥0.10")
   
   formula_res@compareClusterResult <- formula_res@compareClusterResult %>%
-    mutate(GeneRatioCategory = cut(GeneRatio, breaks = bin_breaks, labels = bin_labels, include.lowest = TRUE, right = FALSE))
+    mutate(GeneRatioCategory = cut(GeneRatio, breaks = bin_breaks, labels = bin_labels, 
+                                   include.lowest = TRUE, right = FALSE))
   
-  # **Define reference dot sizes**
   size_mapping <- c("≤0.01" = 2, "0.01 - 0.05" = 4, "0.05 - 0.10" = 6, "≥0.10" = 8)
   
-  # **Ensure all necessary variables are characters/numeric**
   formula_res@compareClusterResult <- formula_res@compareClusterResult %>%
     mutate(
       p.adjust = as.numeric(as.character(p.adjust)),
@@ -233,32 +238,27 @@ generate_enrichment_plot <- function(gene_lists, de_results_df, universe_entrez,
         as.character(Description)
       ),
       tooltip_text = paste(
-        "Cluster: ", as.character(Cluster), "<br>",  
-        "GO Term: ", as.character(Description), "<br>",  
+        "Cluster: ", as.character(Cluster), "<br>",
+        "GO Term: ", as.character(Description), "<br>",
         "p.adjust: ", signif(p.adjust, 3), "<br>",
         "GeneRatio: ", signif(GeneRatio, 3), "<br>",
-        "Top Genes:<br>", as.character(GeneSymbols)  
+        "Top Genes:<br>", as.character(GeneSymbols)
       )
     )
   
-  # **Create ggplot object**
   p <- ggplot(formula_res@compareClusterResult, aes(
-    x = Cluster, 
-    y = plot_label, 
-    size = GeneRatioCategory,  
-    color = p.adjust,
-    text = tooltip_text  
+    x = Cluster, y = plot_label, size = GeneRatioCategory,
+    color = p.adjust, text = tooltip_text
   )) +
-    geom_point(alpha = 0.8) +  
-    scale_size_manual(name = "Gene Ratio", values = size_mapping) +  
-    scale_color_gradient(low = "red", high = "blue", 
-                         limits = c(min(formula_res@compareClusterResult$p.adjust, na.rm = TRUE), 
+    geom_point(alpha = 0.8) +
+    scale_size_manual(name = "Gene Ratio", values = size_mapping) +
+    scale_color_gradient(low = "red", high = "blue",
+                         limits = c(min(formula_res@compareClusterResult$p.adjust, na.rm = TRUE),
                                     max(formula_res@compareClusterResult$p.adjust, na.rm = TRUE)),
-                         name = "p.adjust") +  
-    guides(color = guide_colorbar(title = "p.adjust")) +  
+                         name = "p.adjust") +
+    guides(color = guide_colorbar(title = "p.adjust")) +
     ggtitle(paste("GO Term Enrichment (", ont_category, ")", sep = "")) +
-    xlab("DE Gene list") +
-    ylab("GO Term") +
+    xlab("DE Gene list") + ylab("GO Term") +
     theme_minimal() +
     theme(
       plot.title = element_text(size = 16, face = "bold"),
@@ -268,11 +268,9 @@ generate_enrichment_plot <- function(gene_lists, de_results_df, universe_entrez,
       legend.text = element_text(size = 10)
     )
   
-  # **Convert to interactive plot (ensure tooltips work)**
-  interactive_plot <- ggplotly(p, tooltip = "text") %>%  
+  interactive_plot <- ggplotly(p, tooltip = "text") %>%
     layout(legend = list(title = list(text = "Gene Ratio")))
   
-  # **Static High-Resolution Plot (for manuscript)**
   static_plot <- dotplot(formula_res, showCategory = top_n) +
     ggtitle(paste("GO Term Enrichment (", ont_category, ")", sep = "")) +
     theme_minimal() +
@@ -284,10 +282,9 @@ generate_enrichment_plot <- function(gene_lists, de_results_df, universe_entrez,
       legend.text = element_text(size = 10)
     )
   
-  # **Return interactive plot, static plot, and full GO results**
   return(list(
-    interactive_plot = interactive_plot, 
-    static_plot = static_plot, 
+    interactive_plot = interactive_plot,
+    static_plot = static_plot,
     go_results = download_go_results
   ))
 }
@@ -563,46 +560,110 @@ generate_volcano_plot <- function(efit_results_df, contrast_name) {
   volcano.res[which(volcano.res$adj.P.value < 0.05 & volcano.res['logFC'] > 0.58), "group"] <- "Upregulated"
   volcano.res[which(volcano.res$adj.P.value < 0.05 & volcano.res['logFC'] < -0.58), "group"] <- "Downregulated"
   
-  # Apply small offset to avoid log(1) = 0 issues
-  volcano.res$neglog10p <- -log10(volcano.res$adj.P.value + 1e-10)  # Ensure no log(1)
-  # Check if all y-values are small (<1) and set range accordingly
-  if (max(volcano.res$neglog10p, na.rm = TRUE) < 1) {
-    y_axis_range <- c(0, 1)  # Force range to 0-1
-  } else {
-    y_axis_range <- c(0, max(volcano.res$neglog10p, na.rm = TRUE) + 0.5)  # Dynamic range otherwise
-  }
-  plot_ly(
+  # Calculate -log10(p-value)
+  volcano.res$neglog10p <- -log10(volcano.res$adj.P.value + 1e-300)  # Avoid log(0)
+  
+  # Better y-axis range - always show significance threshold
+  sig_threshold <- -log10(0.05)  # = 1.3
+  max_y <- max(volcano.res$neglog10p, na.rm = TRUE)
+  y_axis_range <- c(0, max(sig_threshold + 0.5, max_y + 0.5))  # Always show above threshold
+  
+  # Count significant genes
+  n_up <- sum(volcano.res$group == "Upregulated")
+  n_down <- sum(volcano.res$group == "Downregulated")
+  n_total <- nrow(volcano.res)
+  
+  # Create plot
+  p <- plot_ly(
     data = volcano.res,
-    x = volcano.res$logFC, 
-    y = volcano.res$neglog10p,  # Use modified neg log10 p-values
-    hoverinfo = "text", 
-    text = paste(
-      "Gene: ", volcano.res$SYMBOL, 
-      "<br>Ensemble: ",volcano.res$ensembleID,
-      "<br>logFC: ", round(volcano.res$logFC, 2),
-      "<br>adj.P.val: ", round(volcano.res$adj.P.value, 2)
-    ),
-    mode = "markers", 
-    color = volcano.res$group,
-    colors = c(NotSignificant = "gray", Upregulated = "red", Downregulated = "blue")
-  ) %>% 
+    x = ~logFC,
+    y = ~neglog10p,
+    type = "scatter",
+    mode = "markers",
+    color = ~group,
+    colors = c(NotSignificant = "gray", Upregulated = "red", Downregulated = "blue"),
+    marker = list(size = 5, opacity = 0.6),
+    hoverinfo = "text",
+    text = ~paste0(
+      "<b>", SYMBOL, "</b>",
+      "<br>Ensembl: ", ensembleID,
+      "<br>logFC: ", round(logFC, 3),
+      "<br>adj.P.value: ", formatC(adj.P.value, format = "e", digits = 2),
+      "<br>-log10(adj.P): ", round(neglog10p, 2)
+    )
+  ) %>%
     layout(
-      title = paste(contrast_name, "(Adj. P-value vs. Fold-Change)"),
-      xaxis = list(title = 'logFC'), 
-      yaxis = list(
-        title = '-log10(adj.PVal)',
-        exponentformat = "none",  # Disable scientific notation
-        separatethousands = TRUE,  # Keep numbers readable
-        tickmode = "linear",  # Ensure even tick spacing
-        range = y_axis_range 
+      title = list(
+        text = paste0(gsub("_", " ", contrast_name), 
+                      "<br><sub>", n_up, " upregulated | ", 
+                      n_down, " downregulated | ",
+                      n_total - n_up - n_down, " not significant</sub>"),
+        font = list(size = 16)
       ),
-      margin = list(l = 75, t = 150)
+      xaxis = list(
+        title = "log<sub>2</sub> Fold Change",
+        zeroline = TRUE,
+        zerolinewidth = 1,
+        zerolinecolor = "black"
+      ),
+      yaxis = list(
+        title = "-log<sub>10</sub>(Adjusted P-value)",
+        range = y_axis_range
+      ),
+      shapes = list(
+        # Horizontal line at significance threshold
+        list(
+          type = "line",
+          x0 = min(volcano.res$logFC, na.rm = TRUE) - 1,
+          x1 = max(volcano.res$logFC, na.rm = TRUE) + 1,
+          y0 = sig_threshold,
+          y1 = sig_threshold,
+          line = list(color = "red", width = 1, dash = "dash")
+        ),
+        # Vertical line at logFC = 0.58
+        list(
+          type = "line",
+          x0 = 0.58,
+          x1 = 0.58,
+          y0 = 0,
+          y1 = max(y_axis_range),
+          line = list(color = "blue", width = 1, dash = "dash")
+        ),
+        # Vertical line at logFC = -0.58
+        list(
+          type = "line",
+          x0 = -0.58,
+          x1 = -0.58,
+          y0 = 0,
+          y1 = max(y_axis_range),
+          line = list(color = "blue", width = 1, dash = "dash")
+        )
+      ),
+      annotations = if (n_up == 0 && n_down == 0) {
+        list(
+          list(
+            x = 0.5,
+            y = 0.95,
+            xref = "paper",
+            yref = "paper",
+            text = "<b>No significant genes</b><br>(adj.P < 0.05 & |logFC| > 0.58)",
+            showarrow = FALSE,
+            font = list(size = 14, color = "darkred"),
+            bgcolor = "rgba(255, 200, 200, 0.8)",
+            bordercolor = "red",
+            borderwidth = 2
+          )
+        )
+      } else {
+        list()
+      },
+      margin = list(l = 75, t = 100, b = 75)
     )
   
-  
+  return(p)
 }
 
-generate_heatmap <- function(efit_results_df, lcpm_matrix, dge_list_NOISeq, title, num_genes = 50, fontsize_row = 12) {
+generate_heatmap <- function(efit_results_df, lcpm_matrix, dge_list_filt, title, num_genes = 50, fontsize_row = 12) {
   
   # Extract contrast name dynamically
   contrast_name <- unique(efit_results_df$contrast)[1]  # Ensure it's a single contrast
@@ -612,7 +673,7 @@ generate_heatmap <- function(efit_results_df, lcpm_matrix, dge_list_NOISeq, titl
   
   
   # Filter samples that belong to these groups
-  selected_samples <- dge_list_NOISeq$samples %>%
+  selected_samples <- dge_list_filt$samples %>%
     filter(!!sym(report_params$group_var) %in% contrast_groups) %>%  # Select samples in the contrast
     select(SampleName, all_of(report_params$group_var))
   
@@ -780,7 +841,6 @@ display_de_result_table <- function(efit, contrast_name = "Contrast") {
     options = list(
       dom = 'Bfrtip',
       buttons = c('copy', 'csv', 'excel'),
-      #pageLength = 10,
       autoWidth = TRUE,
       deferRender = TRUE,
       scrollY = 200,
@@ -789,7 +849,10 @@ display_de_result_table <- function(efit, contrast_name = "Contrast") {
       columnDefs = list(list(className = 'dt-center', targets = "_all"))
     )
   ) %>%
-    formatRound(columns = c("logFC", "AveExpr", "t", "P.value", "adj.P.value", "B"), digits = 3) %>%
+    # Format numeric columns (not p-values) with 3 decimal places
+    formatRound(columns = c("logFC", "AveExpr", "t", "B"), digits = 3) %>%
+    # Format p-values with scientific notation (3 significant figures)
+    formatSignif(columns = c("P.value", "adj.P.value"), digits = 3) %>%
     formatStyle(
       'logFC',
       background = styleInterval(c(-0.58, 0.58), c('lightblue', 'white', 'lightpink'))
@@ -889,65 +952,84 @@ library(plotly)
 library(RColorBrewer)
 library(car)
 
-plot_pca <- function(dge, title, grp_var=report_params$group_var, show_legend = TRUE, combine_plots = FALSE) {
-  # Extract log-transformed CPM values
-  PCA_DATA <- t(get_log_matrix(dge))
-  rownames(PCA_DATA) <- dge$samples$sample_id
-  numsonly <- as.data.frame(PCA_DATA)
-  numsonly <- as.data.frame(lapply(numsonly, as.numeric))  # Ensure numeric values
+# Improved plot_pca - Faster and cleaner
+plot_pca <- function(dge, title = "", grp_var = report_params$group_var, show_legend = TRUE) {
   
-  # Perform PCA
-  pca_res <- prcomp(numsonly, center = TRUE, scale. = FALSE, rank. = 2)
-  scores <- pca_res$x
+  # Extract log-CPM efficiently
+  lcpm <- get_log_matrix(dge)
   
-  # Extract group information
-  group_labels <- dge$samples[[grp_var]]  
-  colors <- RColorBrewer::brewer.pal(length(unique(group_labels)), "Set1")
+  # Perform PCA directly on transposed matrix (samples in rows)
+  pca_res <- prcomp(t(lcpm), center = TRUE, scale. = FALSE, rank. = 2)
   
-  # Initialize plotly object
-  fig <- plot_ly()
-  
-  # Function to plot ellipses
-  plot_ellipse_function <- function(target) {
-    target_data <- as.data.frame(scores[group_labels == target, 1:2])
-    target_color <- colors[which(unique(group_labels) == target)]
-    
-    ellipse_coords <- car::dataEllipse(target_data$PC1, target_data$PC2, 
-                                       levels = 0.68, plot.points = FALSE, add = TRUE, draw = FALSE)
-    
-    fig <<- fig %>%
-      add_polygons(x = ellipse_coords[,1], y = ellipse_coords[,2],
-                   line = list(color = target_color, dash = "dot"),
-                   fillcolor = target_color, opacity = 0.3,
-                   showlegend = FALSE, hoverinfo = "skip")
-  }
-  
-  # Function to plot points
-  plot_points_function <- function(target) {
-    target_data <- as.data.frame(scores[group_labels == target, 1:2])
-    rownames(target_data) <- rownames(PCA_DATA)[group_labels == target]
-    target_color <- colors[which(unique(group_labels) == target)]
-    
-    text_data <- as.character(rownames(target_data))
-    PC1 <- as.numeric(target_data$PC1)
-    PC2 <- as.numeric(target_data$PC2)
-    
-    fig <<- fig %>%
-      add_trace(data = target_data, x = ~PC1, y = ~PC2, 
-                type = "scatter", mode = "markers", name = target,
-                marker = list(color = target_color),
-                text = ~text_data, hoverinfo = "text", showlegend = show_legend)
-  }
-  
-  # Add ellipses and points
-  invisible(lapply(unique(group_labels), plot_ellipse_function))
-  invisible(lapply(unique(group_labels), plot_points_function))
-  
-  # Add title
-  # Get % variance explained
+  # Get variance explained
   percentVar <- round(100 * pca_res$sdev^2 / sum(pca_res$sdev^2), 1)
   
-  # Add axis titles with % variance
+  # Create data frame for plotting
+  plot_data <- data.frame(
+    PC1 = pca_res$x[, 1],
+    PC2 = pca_res$x[, 2],
+    Group = factor(dge$samples[[grp_var]]),
+    SampleID = rownames(pca_res$x),
+    stringsAsFactors = FALSE
+  )
+  
+  # Get unique groups and colors
+  groups <- levels(plot_data$Group)
+  n_groups <- length(groups)
+  colors <- if (n_groups <= 8) {
+    RColorBrewer::brewer.pal(max(3, n_groups), "Set1")[1:n_groups]
+  } else {
+    rainbow(n_groups)
+  }
+  names(colors) <- groups
+  
+  # Initialize plotly figure
+  fig <- plot_ly()
+  
+  # Add ellipses and points for each group
+  for (grp in groups) {
+    grp_data <- plot_data[plot_data$Group == grp, ]
+    grp_color <- colors[as.character(grp)]
+    
+    # Add ellipse (only if >2 points)
+    if (nrow(grp_data) > 2) {
+      ellipse_coords <- car::dataEllipse(
+        grp_data$PC1, grp_data$PC2,
+        levels = 0.68, 
+        plot.points = FALSE, 
+        draw = FALSE
+      )
+      
+      fig <- fig %>%
+        add_polygons(
+          x = ellipse_coords[, 1], 
+          y = ellipse_coords[, 2],
+          line = list(color = grp_color, dash = "dot"),
+          fillcolor = grp_color, 
+          opacity = 0.3,
+          showlegend = FALSE, 
+          hoverinfo = "skip",
+          name = paste0(grp, "_ellipse")
+        )
+    }
+    
+    # Add points
+    fig <- fig %>%
+      add_trace(
+        data = grp_data,
+        x = ~PC1, 
+        y = ~PC2,
+        type = "scatter", 
+        mode = "markers",
+        name = as.character(grp),
+        marker = list(color = grp_color, size = 10),
+        text = ~SampleID,
+        hoverinfo = "text",
+        showlegend = show_legend
+      )
+  }
+  
+  # Add layout with variance %
   fig <- fig %>% layout(
     title = title,
     xaxis = list(title = paste0("PC1 (", percentVar[1], "%)")),
@@ -955,6 +1037,56 @@ plot_pca <- function(dge, title, grp_var=report_params$group_var, show_legend = 
   )
   
   return(fig)
+}
+
+# Fixed plot_pca_combined - Preserves axis titles
+plot_pca_combined <- function(dge_list, grp_var = report_params$group_var, annotation_labels = NULL) {
+  
+  # Generate individual PCA plots
+  n_plots <- length(dge_list)
+  show_legend_flags <- c(TRUE, rep(FALSE, n_plots - 1))
+  
+  pca_plots <- lapply(1:n_plots, function(i) {
+    plot_pca(
+      dge = dge_list[[i]], 
+      title = "", 
+      grp_var = grp_var, 
+      show_legend = show_legend_flags[i]
+    )
+  })
+  
+  # Create subplot with preserved axis titles
+  combined_plot <- subplot(
+    pca_plots, 
+    nrows = 1, 
+    shareY = FALSE,
+    shareX = FALSE,
+    titleX = TRUE,  # KEY: Keep x-axis titles with variance %
+    titleY = TRUE   # KEY: Keep y-axis titles
+  )
+  
+  # Add subplot annotations if provided
+  if (!is.null(annotation_labels)) {
+    annotations <- lapply(seq_along(annotation_labels), function(i) {
+      list(
+        x = (i - 0.5) / length(annotation_labels),
+        y = 1.05,  # Position above plot to avoid overlap
+        text = paste0("<b>", annotation_labels[i], "</b>"),
+        xref = "paper",
+        yref = "paper",
+        xanchor = "center",
+        yanchor = "bottom",
+        showarrow = FALSE,
+        font = list(size = 14)
+      )
+    })
+    combined_plot <- combined_plot %>% layout(
+      annotations = annotations,
+      margin = list(t = 60)  # Add top margin for annotations
+    )
+  }
+  
+  return(combined_plot)
 }
 # Define function to subset samples by contrast and run PCA
 plot_pca_by_contrast <- function(dge_list, contrast_name, group_var) {
@@ -1107,32 +1239,6 @@ plot_one_pca_by_contrast <- function(dge_list, contrast_name, group_var) {
                        show_legend = TRUE)
   
   return(pca_plot)
-}
-
-
-plot_pca_combined <- function(dge_list, grp_var = report_params$group_var, annotation_labels = NULL) {
-  show_legend_flags <- c(TRUE, rep(FALSE, length(dge_list) - 1))
-  pca_plots <- mapply(plot_pca, dge_list, grp_var = grp_var, show_legend = show_legend_flags, title = "", SIMPLIFY = FALSE)
-  
-  combined_plot <- subplot(pca_plots, nrows = 1, shareY = FALSE)
-  
-  if (!is.null(annotation_labels)) {
-    annotations <- lapply(seq_along(annotation_labels), function(i) {
-      list(
-        x = (i - 0.5) / length(annotation_labels),
-        y = 1,
-        text = annotation_labels[i],
-        xref = "paper",
-        yref = "paper",
-        xanchor = "center",
-        yanchor = "bottom",
-        showarrow = FALSE
-      )
-    })
-    combined_plot <- combined_plot %>% layout(annotations = annotations)
-  }
-  
-  return(combined_plot)
 }
 
 
