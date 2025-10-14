@@ -1,10 +1,4 @@
-*.sif
-*.tar
-*.tar.gz
-*.RData
-*.rds
-*.html
-*.pdf
-.nextflow*
-work/
 tmp/
+output/
+logs/*error
+logs/*log

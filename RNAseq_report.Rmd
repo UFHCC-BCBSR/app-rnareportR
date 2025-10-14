@@ -28,57 +28,89 @@ library(edgeR)
 library(qs)
 library(kableExtra)
 library(yaml)
-source("HRK_funcs.R")
+source("R/helper-funcs.R")
 library(downloadthis)
 select <- dplyr::select
+#TEST=TRUE
 ```
 
 ```{r params}
-# Read the report parameters from the text file
 parse_params <- function(filepath) {
   lines <- readLines(filepath)
   param_list <- list()
-
+  
   for (line in lines) {
+    line <- trimws(line)
+    
+    # Skip empty lines and comments
+    if (line == "" || startsWith(line, "#")) {
+      next
+    }
+    
     if (grepl("^--", line)) {
-      parts <- strsplit(line, " ", fixed = TRUE)[[1]]
-      key <- gsub("^--", "", parts[1])
-      value <- paste(parts[-1], collapse = " ")
-      value <- gsub('^"|"$', '', value)  # Remove surrounding quotes
-
-      # Convert logical strings to actual logical values
-      if (tolower(value) == "true") {
-        value <- TRUE
-      } else if (tolower(value) == "false") {
-        value <- FALSE
+      space_pos <- regexpr("\\s", line)
+      
+      if (space_pos > 0) {
+        key <- gsub("^--", "", substr(line, 1, space_pos - 1))
+        
+        # NORMALIZE HYPHENS TO UNDERSCORES for consistency
+        key <- gsub("-", "_", key)
+        
+        value <- trimws(substr(line, space_pos + 1, nchar(line)))
+        
+        # Remove surrounding quotes
+        if ((startsWith(value, '"') && endsWith(value, '"')) ||
+            (startsWith(value, "'") && endsWith(value, "'"))) {
+          value <- substr(value, 2, nchar(value) - 1)
+        }
+        
+        # Convert logical strings
+        if (tolower(value) == "true") {
+          value <- TRUE
+        } else if (tolower(value) == "false") {
+          value <- FALSE
+        }
+        
+        param_list[[key]] <- value
       }
-
-      param_list[[key]] <- value
     }
   }
-
+  
   return(param_list)
 }
 
-#TEST=FALSE
+# Determine which params file to use
 if (!exists("TEST") || is.null(TEST)) {
   # Production mode: read from passed-in params
-  report_params <- parse_params(params$params_file)
+  if (!is.null(params$params_file) && file.exists(params$params_file)) {
+    report_params <- parse_params(params$params_file)
+    
+    # CRITICAL: Merge with directly-passed params, giving them priority
+    # This handles report_title and any other params passed via sbatch
+    for (param_name in names(params)) {
+      if (param_name != "params_file") {  # Don't overwrite the file path itself
+        report_params[[param_name]] <- params[[param_name]]
+      }
+    }
+    
+  } else {
+    stop("No valid params file provided via params$params_file")
+  }
 } else {
   # Testing mode
-  report_params <- parse_params("/blue/cancercenter-dept/PIPELINES/REPORTING/rmarkdown_report_module/param_files/Sharma_params.txt")
+  report_params <- parse_params("/blue/cancercenter-dept/hkates/Tests/rnareport/output/new-DE-test_params.txt")
 }
-
 ```
 
 ```{r analysis}
-invisible(
-  suppressMessages(
-    suppressWarnings(
-      capture.output(source("analysis.R"))
-    )
-  )
-)
+# Source the function definition
+source("R/analysis.R")
+
+# Run the analysis and extract results
+analysis_results <- run_rnaseq_analysis(report_params)
+
+# Unpack results into global environment for backwards compatibility
+list2env(analysis_results, envir = .GlobalEnv)
 ```
 
 # Project Summary
@@ -137,6 +169,23 @@ if (url == "") {
 }
 ```
 
+```{r setup_method_text, echo=FALSE}
+# Set method description based on actual DE tool used
+if (exists("de_method") && !is.null(de_method)) {
+  method_text <- switch(de_method,
+    "deseq2" = "Differential expression analysis was performed using DESeq2 (Love et al. 2014). Raw RNA-seq counts were filtered using edgeR's filterByExpr to remove lowly expressed genes. DESeq2's negative binomial generalized linear model was used to model count data, estimate gene-wise dispersion parameters, and perform differential expression testing. Log-fold changes were shrunk using apeglm to provide more accurate effect size estimates by reducing noise in low-count genes.",
+
+"edger_GLM" = "Differential expression analysis was performed using edgeR GLM quasi-likelihood pipeline (Robinson et al. 2010, Chen et al. 2016). Raw RNA-seq counts were filtered using filterByExpr to remove lowly expressed genes. TMM normalization was applied to calculate normalization factors, followed by estimation of gene-wise negative binomial dispersions using the Cox-Reid profile-adjusted likelihood method. Differential expression was assessed using quasi-likelihood F-tests, which provide more robust error rate control than likelihood ratio tests.",
+
+"limma_voom" = "Differential expression analysis was performed using the limma-voom pipeline (Law et al. 2014, Ritchie et al. 2015). Raw RNA-seq counts were filtered using edgeR's filterByExpr to remove lowly expressed genes. TMM normalization factors were calculated to account for differences in library sizes and RNA composition between samples. The voom function transformed count data to log2-counts-per-million (logCPM) and estimated the mean-variance relationship to calculate precision weights for each observation. These weights account for the mean-variance trend in RNA-seq data (heteroscedasticity). A linear model was fitted to the weighted transformed data, and contrasts were computed for pairwise comparisons. Moderated t-statistics were calculated using empirical Bayes methods, which borrow information across genes to shrink gene-wise variance estimates toward a common value, improving statistical power especially for small sample sizes.",
+    
+    "Differential expression analysis was performed using standard methods for RNA-seq data."
+  )
+} else {
+  method_text <- "Differential expression analysis was performed using standard methods for RNA-seq data."
+}
+```
+
 ## Download Raw and Filtered Counts Data
 
 Description of Data Sheets:
@@ -163,9 +212,8 @@ extract_dge_data <- function(dge) {
   return(df)
 }
 
-dge_filtered_df <- extract_dge_data(dge_list_edgeR)
+dge_filtered_df <- extract_dge_data(dge_list_filt)
 dge_raw_df <- extract_dge_data(dge_list_raw)
-dge_NOISeq_df <- extract_dge_data(dge_list_NOISeq)
 
 # Convert matrices to dataframes and add gene symbols
 convert_matrix <- function(matrix, genes_df) {
@@ -179,36 +227,36 @@ convert_matrix <- function(matrix, genes_df) {
 # Determine whether to use batch-corrected log-CPM matrix
 use_batch_corrected <- !is.null(report_params$batch_var) &&
                        report_params$batch_var == "Batch" &&
-                       !is.null(dge_list_NOISeq$E_corrected)
+                       !is.null(dge_list_filt$E_corrected)
 
 if (use_batch_corrected) {
   message("Using batch-corrected matrix for both CPM and LCPM output.")
-  lcpm_matrix <- dge_list_NOISeq$E_corrected
+  lcpm_matrix <- dge_list_filt$E_corrected
   cpm_matrix <- 2^lcpm_matrix  # Back-transform
 
-  cpm_df <- convert_matrix(cpm_matrix, dge_list_edgeR$genes)
-  lcpm_df <- convert_matrix(lcpm_matrix, dge_list_edgeR$genes)
+  cpm_df <- convert_matrix(cpm_matrix, dge_list_filt$genes)
+  lcpm_df <- convert_matrix(lcpm_matrix, dge_list_filt$genes)
 
   cpm_name <- "CPM.batchcorrected"
   lcpm_name <- "LCPM.batchcorrected"
 } else {
-  lcpm_matrix <- cpm(dge_list_NOISeq, log = TRUE)
-  cpm_matrix <- cpm(dge_list_NOISeq)
+  lcpm_matrix <- cpm(dge_list_filt, log = TRUE)
+  cpm_matrix <- cpm(dge_list_filt)
 
-  cpm_df <- convert_matrix(cpm_matrix, dge_list_edgeR$genes)
-  lcpm_df <- convert_matrix(lcpm_matrix, dge_list_edgeR$genes)
+  cpm_df <- convert_matrix(cpm_matrix, dge_list_filt$genes)
+  lcpm_df <- convert_matrix(lcpm_matrix, dge_list_filt$genes)
 
   cpm_name <- "CPM"
   lcpm_name <- "LCPM"
 }
 
 # Extract sample metadata
-sample_metadata <- dge_list_NOISeq$samples
+sample_metadata <- dge_list_filt$samples
 
 # Create a list of dataframes to be written to an Excel file
 df_list <- list(
   "Raw" = dge_raw_df,
-  "Filtered" = dge_NOISeq_df,
+  "Filtered" = dge_filtered_df,
   cpm_df,
   lcpm_df,
   "Sample_Metadata" = sample_metadata
@@ -217,7 +265,7 @@ df_list <- list(
 # Rename CPM and LCPM elements after the list is created
 names(df_list)[3:4] <- c(cpm_name, lcpm_name)
 
-if (!is.null(report_params$batch_var) && report_params$batch_var == "Batch" && !is.null(dge_list_NOISeq$E_corrected)) {
+if (!is.null(report_params$batch_var) && report_params$batch_var == "Batch" && !is.null(dge_list_filt$E_corrected)) {
   cat("The CPM and LCPM matrices have been batch-corrected using limma::removeBatchEffect. These corrected matrices are labeled CPM.batchcorrected and LCPM.batchcorrected in the downloadable Excel file.")
 } else {
   cat("Note:No batch correction was applied. CPM and LCPM matrices are based on the standard log-transformed CPM from filtered counts.")
@@ -245,52 +293,41 @@ Principal component analysis of gene expression data were calculated in R v4.3.3
 If batch correction was applied using limma::removeBatchEffect(), the plots below compare PCA of the filtered expression matrix before and after correction. This allows visualization of how batch effects were reduced while preserving biological signal.
 
 ```{r pca all, fig.width=12, fig.height=4}
-genes_filtered <- dge_list_NOISeq$genes[rownames(dge_list_NOISeq$counts), , drop = FALSE]
-if (!is.null(report_params$batch_var) && report_params$batch_var == "Batch") {
+# Simplified - just show before/after filtering or batch correction
+if (!is.null(report_params$batch_var) && report_params$batch_var == "Batch" && !is.null(dge_list_filt$E_corrected)) {
+  # Show uncorrected vs corrected
   dge_uncorrected <- edgeR::DGEList(
-    counts = dge_list_NOISeq$counts,
-    samples = dge_list_NOISeq$samples,
-    genes = genes_filtered
+    counts = dge_list_filt$counts,
+    samples = dge_list_filt$samples,
+    genes = dge_list_filt$genes
   )
-
+  
   dge_corrected <- edgeR::DGEList(
-    counts = 2^dge_list_NOISeq$E_corrected,
-    samples = dge_list_NOISeq$samples,
-    genes = genes_filtered
+    counts = 2^dge_list_filt$E_corrected,
+    samples = dge_list_filt$samples,
+    genes = dge_list_filt$genes
   )
-
+  
   dge_list <- list(dge_uncorrected, dge_corrected)
-  annotation_labels <- c("Filtered (Uncorrected)", "Filtered (Batch Corrected)")
+  annotation_labels <- c("Filtered Genes (logCPM, uncorrected)", 
+                         "Filtered Genes (logCPM, batch corrected)")
 } else {
-  dge_list <- list(dge_list_raw, dge_list_NOISeq, dge_list_edgeR)
-  annotation_labels <- c("Raw", "Filtered (NOISeq)", "Filtered (edgeR)")
+  # Show raw vs filtered
+  dge_list <- list(dge_list_raw, dge_list_filt)
+  annotation_labels <- c("All Genes (logCPM)", 
+                         "Filtered Genes (logCPM)")
 }
 
-
 plot_pca_combined(dge_list, grp_var = report_params$group_var, annotation_labels = annotation_labels)
-if (!is.null(report_params$batch_var) && report_params$batch_var == "Batch") {
-plot_pca_combined(dge_list, grp_var = "Batch", annotation_labels = annotation_labels)}
 ```
 
 ### PCA per-contrast
-
-```{r pca,eval=FALSE}
-# Apply PCA separately for each contrast
-pca_results <- lapply(names(efit_results_dfs)[1:2], function(contrast_name) {
-  plot_pca_by_contrast(dge_list = list(dge_list_NOISeq), 
-                        contrast_name = gsub("_results_df","",contrast_name), 
-                        group_var = report_params$group_var)
-})
-
-# Display PCA plots
-tagList(pca_results)
-```
 
 ```{r contrast pcas, fig.width=8, fig.height=8, message=FALSE, warning=FALSE}
 # Generate list of PCA plots (ggplot objects)
 pca_results <- lapply(names(efit_results_dfs), function(contrast_name) {
   plot_one_pca_by_contrast(
-    dge_list = dge_list_NOISeq,
+    dge_list = dge_list_filt,
     contrast_name = gsub("_results_df", "", contrast_name),
     group_var = report_params$group_var
   )
@@ -412,20 +449,23 @@ pheatmap(
 
 These **mean-variance trend** plots are provided to illustrate how the DE analysis ensure differential expression (DE) results are **not biased by expression-dependent variance**. The top plot shows how **variance changes with expression level** in the raw data. Typically, variance **decreases** as expression increases. This confirms that `voom()` correctly models **heteroscedasticity (unequal variance)** in RNA-seq data. The **Bottom plot** shows variance **after empirical Bayes shrinkage** using `eBayes()`. The trend should be **flat**, indicating variance is properly stabilized. 
 
-```{r SA plot side by side, fig.width=8, fig.height=4, out.width="100%"}
+## Mean-Variance Relationship: Before and After Variance Moderation
+
+```{r SA plot side by side, eval=!is.null(voom_plot_path), fig.width=8, fig.height=4}
+# Only show this section if limma-voom was used
 library(gridExtra)
 library(grid)
 library(png)
 
 # Load the PNG plot as a raster image
-img <- rasterGrob(readPNG(paste0(report_params$out_dir, "/voom_plot.png")), interpolate = TRUE)
+img <- rasterGrob(readPNG(voom_plot_path), interpolate = TRUE)
 
 # Open a graphics device, plot `plotSA()`, then capture it
 tmp <- tempfile(fileext = ".png")
-invisible(png(tmp, width = 600, height = 600, res = 150))  # Open a temporary PNG device
+invisible(png(tmp, width = 600, height = 600, res = 150))
 par(mar=c(3, 5, 2, 2), cex.axis=0.7, cex.lab=0.7, cex.main=0.7)  
 plotSA(efit_list[[1]], main = "Final model: Mean-Variance trend")
-invisible(dev.off())  # Close the device
+invisible(dev.off())
 
 # Load the saved plot as a raster image
 plot_sa_grob <- rasterGrob(readPNG(tmp), interpolate = TRUE)
@@ -436,7 +476,9 @@ grid.arrange(img, plot_sa_grob, ncol = 2)
 
 # Differential Expression Analysis
 
-Differential expression analysis was performed using limma v3.5 (Ritchie et al. 2015). Raw RNA-seq counts were filtered using NOISeq v2.4 (Tarazona et al., 2011) to remove features that have an average expression per condition less than 1 cpm a coefficient of variation > 100% in all the conditions. To account for differences in sequencing depth and composition bias, TMM normalization as implemented in edgeR v3.4 (Robinson et al. 2010) was used to calculate normalization factors that were used during voom transformation. A linear model was fitted to the transformed data, and pairwise comparisons between conditions were assessed by computing moderated t-statistics, moderated F-statistic, and log-odds of differential expression with empirical Bayes moderation of the standard errors. Statistical significance was assessed using adjusted p-values to control the false discovery rate (FDR).
+```{r methods_text, results='asis', echo=FALSE}
+cat(method_text)
+```
 
 ```{r,results='asis'}
 # Print the number of contrasts tested
@@ -525,7 +567,7 @@ heatmap_list <- lapply(seq_along(efit_results_dfs), function(i) {
   generate_heatmap(
     efit_results_df = efit_results_dfs[[i]],  
     lcpm_matrix = lcpm_matrix,  
-    dge_list_NOISeq = dge_list_NOISeq,  
+    dge_list_filt = dge_list_filt,  
     title = paste("Scaled Gene Expression (Z-scores of logCPM) of Top 50 DE Genes\n", gsub("efit_|_results_df","",names(efit_results_dfs)[i])),  
     num_genes = 50,  
     fontsize_row = 9
@@ -547,11 +589,22 @@ enrichment_messages <- c()
 for (i in seq_along(entrez_ids_list)) {
   contrast_name <- names(entrez_ids_list)[i] %>%
     gsub("top_DE_entrezIDs_?", "", .)
-
+  
   up_entry <- entrez_ids_list[[i]]$up
   down_entry <- entrez_ids_list[[i]]$down
-
-  if (!is.null(up_entry$message)) enrichment_messages <- c(enrichment_messages, paste0(gsub("efit_|_results_df","",contrast_name), " (up): ", up_entry$message))
+  
+  # Check BOTH up and down messages
+  if (!is.null(up_entry$message)) {
+    enrichment_messages <- c(enrichment_messages, 
+                            paste0(gsub("efit_|_results_df", "", contrast_name), 
+                                   " (up): ", up_entry$message))
+  }
+  
+  if (!is.null(down_entry$message)) {
+    enrichment_messages <- c(enrichment_messages, 
+                            paste0(gsub("efit_|_results_df", "", contrast_name), 
+                                   " (down): ", down_entry$message))
+  }
 }
 ```
 
