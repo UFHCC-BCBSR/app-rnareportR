@@ -98,7 +98,7 @@ if (!exists("TEST") || is.null(TEST)) {
   }
 } else {
   # Testing mode
-  report_params <- parse_params("/blue/cancercenter-dept/hkates/Tests/rnareport/output/new-DE-test_params.txt")
+  report_params <- parse_params("/blue/cancercenter-dept/hkates/Tests/rnareport/output/report-with-NOISeq-test_params.txt")
 }
 ```
 
@@ -170,19 +170,59 @@ if (url == "") {
 ```
 
 ```{r setup_method_text, echo=FALSE}
+# Build filtering method text based on parameters
+if (exists("report_params") && !is.null(report_params$filter_method)) {
+  if (report_params$filter_method == "NOISeq") {
+    filter_text <- sprintf(
+      "Raw RNA-seq counts were filtered using NOISeq's filtered.data function (method=%s, CPM threshold=%s, CV cutoff=%s%%) to remove lowly expressed genes. Genes were retained if the sum of CPM values across samples in at least one condition exceeded CPM × number of samples, and had a coefficient of variation ≤%s%% within conditions.",
+      report_params$noiseq_method,
+      report_params$cpm,
+      report_params$cv_cutoff,
+      report_params$cv_cutoff
+    )
+  } else {
+    # Default to edgeR
+    filter_text <- sprintf(
+      "Raw RNA-seq counts were filtered using edgeR's filterByExpr function (min.count=%s, min.prop=%s) to remove lowly expressed genes. Genes were retained if they achieved at least %s counts in at least %.0f%% of samples within at least one group.",
+      report_params$filter_min_count,
+      report_params$filter_min_prop,
+      report_params$filter_min_count,
+      as.numeric(report_params$filter_min_prop) * 100
+    )
+  }
+} else {
+  # Fallback if parameters don't exist
+  filter_text <- "Raw RNA-seq counts were filtered to remove lowly expressed genes."
+}
+
 # Set method description based on actual DE tool used
 if (exists("de_method") && !is.null(de_method)) {
   method_text <- switch(de_method,
-    "deseq2" = "Differential expression analysis was performed using DESeq2 (Love et al. 2014). Raw RNA-seq counts were filtered using edgeR's filterByExpr to remove lowly expressed genes. DESeq2's negative binomial generalized linear model was used to model count data, estimate gene-wise dispersion parameters, and perform differential expression testing. Log-fold changes were shrunk using apeglm to provide more accurate effect size estimates by reducing noise in low-count genes.",
-
-"edger_GLM" = "Differential expression analysis was performed using edgeR GLM quasi-likelihood pipeline (Robinson et al. 2010, Chen et al. 2016). Raw RNA-seq counts were filtered using filterByExpr to remove lowly expressed genes. TMM normalization was applied to calculate normalization factors, followed by estimation of gene-wise negative binomial dispersions using the Cox-Reid profile-adjusted likelihood method. Differential expression was assessed using quasi-likelihood F-tests, which provide more robust error rate control than likelihood ratio tests.",
-
-"limma_voom" = "Differential expression analysis was performed using the limma-voom pipeline (Law et al. 2014, Ritchie et al. 2015). Raw RNA-seq counts were filtered using edgeR's filterByExpr to remove lowly expressed genes. TMM normalization factors were calculated to account for differences in library sizes and RNA composition between samples. The voom function transformed count data to log2-counts-per-million (logCPM) and estimated the mean-variance relationship to calculate precision weights for each observation. These weights account for the mean-variance trend in RNA-seq data (heteroscedasticity). A linear model was fitted to the weighted transformed data, and contrasts were computed for pairwise comparisons. Moderated t-statistics were calculated using empirical Bayes methods, which borrow information across genes to shrink gene-wise variance estimates toward a common value, improving statistical power especially for small sample sizes.",
-    
-    "Differential expression analysis was performed using standard methods for RNA-seq data."
+    "deseq2" = paste0(
+      "Differential expression analysis was performed using DESeq2 (Love et al. 2014). ",
+      filter_text,
+      " DESeq2's negative binomial generalized linear model was used to model count data, estimate gene-wise dispersion parameters, and perform differential expression testing. Log-fold changes were shrunk using apeglm to provide more accurate effect size estimates by reducing noise in low-count genes."
+    ),
+    "edger_GLM" = paste0(
+      "Differential expression analysis was performed using edgeR GLM quasi-likelihood pipeline (Robinson et al. 2010, Chen et al. 2016). ",
+      filter_text,
+      " TMM normalization was applied to calculate normalization factors, followed by estimation of gene-wise negative binomial dispersions using the Cox-Reid profile-adjusted likelihood method. Differential expression was assessed using quasi-likelihood F-tests, which provide more robust error rate control than likelihood ratio tests."
+    ),
+    "limma_voom" = paste0(
+      "Differential expression analysis was performed using the limma-voom pipeline (Law et al. 2014, Ritchie et al. 2015). ",
+      filter_text,
+      " TMM normalization factors were calculated to account for differences in library sizes and RNA composition between samples. The voom function transformed count data to log2-counts-per-million (logCPM) and estimated the mean-variance relationship to calculate precision weights for each observation. These weights account for the mean-variance trend in RNA-seq data (heteroscedasticity). A linear model was fitted to the weighted transformed data, and contrasts were computed for pairwise comparisons. Moderated t-statistics were calculated using empirical Bayes methods, which borrow information across genes to shrink gene-wise variance estimates toward a common value, improving statistical power especially for small sample sizes."
+    ),
+    paste0(
+      "Differential expression analysis was performed using standard methods for RNA-seq data. ",
+      filter_text
+    )
   )
 } else {
-  method_text <- "Differential expression analysis was performed using standard methods for RNA-seq data."
+  method_text <- paste0(
+    "Differential expression analysis was performed using standard methods for RNA-seq data. ",
+    filter_text
+  )
 }
 ```
 
