@@ -257,18 +257,64 @@ ui <- fluidPage(
           # Gene Filtering Parameters
           div(class = "info-box",
               tags$i(class = "fa fa-filter"),
-              " Gene filtering uses edgeR's filterByExpr function with these parameters"
+              " Gene filtering removes lowly expressed genes before analysis"
           ),
           h5("Gene Filtering Parameters", style = "margin-top: 15px;"),
+          
+          # Method selection
           fluidRow(
-            column(6,
-                   numericInput("filter_min_count", "Minimum count per sample",
-                                value = 10, min = 1, max = 100, step = 1)
-            ),
-            column(6,
-                   numericInput("filter_min_prop", "Minimum sample proportion",
-                                value = 0.7, min = 0.1, max = 1.0, step = 0.1)
+            column(12,
+                   radioButtons("filter_method", "Filtering Method:",
+                                choices = c("edgeR filterByExpr" = "edgeR",
+                                            "NOISeq filtered.data" = "NOISeq"),
+                                selected = "edgeR",
+                                inline = TRUE)
             )
+          ),
+          
+          # edgeR parameters (conditional)
+          conditionalPanel(
+            condition = "input.filter_method == 'edgeR'",
+            fluidRow(
+              column(6,
+                     numericInput("filter_min_count", "Minimum count per sample",
+                                  value = 10, min = 1, max = 100, step = 1)
+              ),
+              column(6,
+                     numericInput("filter_min_prop", "Minimum sample proportion",
+                                  value = 0.7, min = 0.1, max = 1.0, step = 0.1)
+              )
+            ),
+            div(class = "help-text", style = "margin-top: 5px; font-size: 0.9em; color: #666;",
+                "Genes must have ≥ min_count in ≥ min_prop of samples in at least one group")
+          ),
+          
+          # NOISeq parameters (conditional)
+          conditionalPanel(
+            condition = "input.filter_method == 'NOISeq'",
+            fluidRow(
+              column(6,
+                     numericInput("noiseq_method", "NOISeq Method",
+                                  value = 1, min = 1, max = 3, step = 1)
+              ),
+              column(6,
+                     numericInput("cv_cutoff", "CV Cutoff (%)",
+                                  value = 100, min = 0, max = 500, step = 10)
+              )
+            ),
+            fluidRow(
+              column(6,
+                     numericInput("cpm", "CPM Threshold",
+                                  value = 1, min = 0, max = 10, step = 0.5)
+              ),
+              column(6,
+                     selectInput("p_adj", "P-value Adjustment",
+                                 choices = c("fdr", "bonferroni", "holm", "hochberg", "hommel", "BH", "BY"),
+                                 selected = "fdr")
+              )
+            ),
+            div(class = "help-text", style = "margin-top: 5px; font-size: 0.9em; color: #666;",
+                "Method 1: CPM + CV filter, Method 2: Wilcoxon test, Method 3: Proportion test")
           ),
           
           tags$br(),
@@ -572,11 +618,31 @@ server <- function(input, output, session) {
       }
       
       # NEW: Load filtering parameters
+      # Filter method selection
+      if ("filter_method" %in% names(params)) {
+        updateRadioButtons(session, "filter_method", selected = params$filter_method)
+      }
+      
+      # edgeR parameters
       if ("filter_min_count" %in% names(params)) {
         updateNumericInput(session, "filter_min_count", value = as.numeric(params$filter_min_count))
       }
       if ("filter_min_prop" %in% names(params)) {
         updateNumericInput(session, "filter_min_prop", value = as.numeric(params$filter_min_prop))
+      }
+      
+      # NOISeq parameters
+      if ("noiseq_method" %in% names(params)) {
+        updateNumericInput(session, "noiseq_method", value = as.numeric(params$noiseq_method))
+      }
+      if ("cv_cutoff" %in% names(params)) {
+        updateNumericInput(session, "cv_cutoff", value = as.numeric(params$cv_cutoff))
+      }
+      if ("cpm" %in% names(params)) {
+        updateNumericInput(session, "cpm", value = as.numeric(params$cpm))
+      }
+      if ("p_adj" %in% names(params)) {
+        updateSelectInput(session, "p_adj", selected = params$p_adj)
       }
       if ("n_cores" %in% names(params)) {
         updateNumericInput(session, "n_cores", value = as.numeric(params$n_cores))
@@ -893,39 +959,42 @@ server <- function(input, output, session) {
   # Generate params.txt - UPDATED FUNCTION
   generate_params_content <- function() {
     lines <- c()
-    
     # Basic parameters
     lines <- c(lines, paste("--report_title", shQuote(input$report_title)))
     lines <- c(lines, paste("--rsem_dir", shQuote(values$selected_files$rsem_dir)))
     lines <- c(lines, paste("--group_var", shQuote(input$group_var)))
     lines <- c(lines, paste("--output-path", shQuote(input$output_path)))
-    
     # Optional batch variable
     if (!is.null(input$batch_var) && input$batch_var != "") {
       lines <- c(lines, paste("--batch_var", shQuote(input$batch_var)))
     }
-    
     # NEW: DE tool parameter
     lines <- c(lines, paste("--DE_tool", shQuote(input$DE_tool)))
     
-    # NEW: Filtering parameters
+    # NEW: Filtering method and parameters
+    lines <- c(lines, paste("--filter_method", shQuote(input$filter_method)))
+    
+    # edgeR filtering parameters
     lines <- c(lines, paste("--filter_min_count", input$filter_min_count))
     lines <- c(lines, paste("--filter_min_prop", input$filter_min_prop))
+    
+    # NOISeq filtering parameters
+    lines <- c(lines, paste("--noiseq_method", input$noiseq_method))
+    lines <- c(lines, paste("--cv_cutoff", input$cv_cutoff))
+    lines <- c(lines, paste("--cpm", input$cpm))
+    lines <- c(lines, paste("--p_adj", shQuote(input$p_adj)))
+    
     lines <- c(lines, paste("--n_cores", input$n_cores))
-
     # Filter samples flag
     if (input$filter_samples) {
       lines <- c(lines, "--filter_samples")
     }
-    
     # Sample sheet and contrasts
     lines <- c(lines, paste("--sample_data", shQuote(values$selected_files$sample_sheet)))
     lines <- c(lines, paste("--contrasts", shQuote(values$selected_files$contrasts)))
-    
     # Organism and annotation
     lines <- c(lines, paste("--organism", shQuote(input$organism)))
     lines <- c(lines, paste("--annotation_db", shQuote(input$annotation_db)))
-    
     # Report metadata (only add if not empty)
     if (!is.null(input$PI) && input$PI != "") {
       lines <- c(lines, paste("--PI", shQuote(input$PI)))
@@ -957,11 +1026,9 @@ server <- function(input, output, session) {
     if (!is.null(input$Report_Reviewed_By) && input$Report_Reviewed_By != "") {
       lines <- c(lines, paste("--Report_Reviewed_By", shQuote(input$Report_Reviewed_By)))
     }
-    
     # Optional URLs (empty strings by default)
     lines <- c(lines, '--raw_seq_URL ""')
     lines <- c(lines, '--multiqc_url ""')
-    
     return(lines)
   }
   
