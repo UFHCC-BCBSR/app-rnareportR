@@ -45,13 +45,26 @@ run_rnaseq_analysis <- function(report_params) {
     report_params$batch_var <- NULL
   }
   
-  # Set default filtering parameters if not provided
+  # Set default filtering method if not provided
+  if (!("filter_method" %in% names(report_params))) report_params$filter_method <- "edgeR"
+  
+  # Set default edgeR filtering parameters if not provided
   if (!("filter_min_count" %in% names(report_params))) report_params$filter_min_count <- 10
   if (!("filter_min_prop" %in% names(report_params))) report_params$filter_min_prop <- 0.7
-
+  
+  # Set default NOISeq filtering parameters if not provided
+  if (!("noiseq_method" %in% names(report_params))) report_params$noiseq_method <- 1
+  if (!("cv_cutoff" %in% names(report_params))) report_params$cv_cutoff <- 100
+  if (!("cpm" %in% names(report_params))) report_params$cpm <- 1
+  if (!("p_adj" %in% names(report_params))) report_params$p_adj <- "fdr"
+  
   # Ensure numeric conversion (in case they came from command line as strings)
   report_params$filter_min_count <- as.numeric(report_params$filter_min_count)
   report_params$filter_min_prop <- as.numeric(report_params$filter_min_prop)
+  report_params$noiseq_method <- as.numeric(report_params$noiseq_method)
+  report_params$cv_cutoff <- as.numeric(report_params$cv_cutoff)
+  report_params$cpm <- as.numeric(report_params$cpm)
+  # p_adj stays as character (it's "fdr", "bonferroni", etc.)
 
   # Set default DE tool if not provided
   if (!("DE_tool" %in% names(report_params))) report_params$DE_tool <- "limma_voom"
@@ -145,28 +158,45 @@ run_rnaseq_analysis <- function(report_params) {
   #########  FILTER GENES  ####################
   #############################################
   
-  message("Filtering genes with edgeR filterByExpr...")
+  # Choose method: "edgeR" or "NOISeq"
+  filter_method <- report_params$filter_method  # Set this in your params
+  
+  message(sprintf("Filtering genes with %s...", filter_method))
   
   # Define treatment groups
   treatment.all <- as.factor(DGE$samples[[report_params$group_var]])
   
-  # Call filtering with just the two key parameters
-  filter_result <- filter_genes_edger(
-    count_matrix = DGE$counts,
-    metadata = sample.keys,
-    condition_var = report_params$group_var,
-    min_count = report_params$filter_min_count,
-    min_prop = report_params$filter_min_prop
-  )
+  # Call filtering
+  if (filter_method == "edgeR") {
+    filter_result <- filter_genes(
+      count_matrix = DGE$counts,
+      metadata = sample.keys,
+      condition_var = report_params$group_var,
+      method = "edgeR",
+      min_count = report_params$filter_min_count,
+      min_prop = report_params$filter_min_prop
+    )
+  } else if (filter_method == "NOISeq") {
+    filter_result <- filter_genes(
+      count_matrix = DGE$counts,
+      metadata = sample.keys,
+      condition_var = report_params$group_var,
+      method = "NOISeq",
+      noiseq_method = report_params$noiseq_method,  # typically 1
+      cv_cutoff = report_params$cv_cutoff,          # typically 100
+      cpm = report_params$cpm,                      # typically 1
+      p_adj = report_params$p_adj                   # typically "fdr"
+    )
+  }
   
-  # Create filtered DGE object
+  # Create filtered DGE object (same for both methods)
   DGE.filtered <- DGE[filter_result$keep_genes, , keep.lib.sizes = FALSE]
   
-  # Normalize using TMM method
+  # Normalize using TMM method (same for both methods)
   DGE.filtered <- calcNormFactors(DGE.filtered, method = 'TMM')
   
-  message(sprintf("Genes retained: %d of %d (%.1f%%)", 
-                  filter_result$n_filtered, 
+  message(sprintf("Genes retained: %d of %d (%.1f%%)",
+                  filter_result$n_filtered,
                   filter_result$n_original,
                   filter_result$prop_retained * 100))
   
