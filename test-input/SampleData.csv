@@ -1,0 +1,7 @@
+SampleName,Tissue,Condition,Species
+Withring_REP1,Cell1,Condition1,Hobbit
+Withring_REP2,Cell1,Condition1,Hobbit
+Withring_REP3,Cell1,Condition1,Hobbit
+Withoutring_REP1,Cell1,Condition2,Hobbit
+Withoutring_REP2,Cell1,Condition2,Hobbit
+Withoutring_REP3,Cell1,Condition2,Hobbit
