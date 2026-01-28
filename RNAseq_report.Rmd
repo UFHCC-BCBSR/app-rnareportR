@@ -31,7 +31,6 @@ library(yaml)
 source("R/helper-funcs.R")
 library(downloadthis)
 select <- dplyr::select
-#TEST=TRUE
 ```
 
 ```{r params}
@@ -80,25 +79,20 @@ parse_params <- function(filepath) {
 }
 
 # Determine which params file to use
-if (!exists("TEST") || is.null(TEST)) {
+if (exists("params") && !is.null(params$params_file) && file.exists(params$params_file)) {
   # Production mode: read from passed-in params
-  if (!is.null(params$params_file) && file.exists(params$params_file)) {
-    report_params <- parse_params(params$params_file)
-    
-    # CRITICAL: Merge with directly-passed params, giving them priority
-    # This handles report_title and any other params passed via sbatch
-    for (param_name in names(params)) {
-      if (param_name != "params_file") {  # Don't overwrite the file path itself
-        report_params[[param_name]] <- params[[param_name]]
-      }
+  report_params <- parse_params(params$params_file)
+  
+  # CRITICAL: Merge with directly-passed params, giving them priority
+  for (param_name in names(params)) {
+    if (param_name != "params_file") {
+      report_params[[param_name]] <- params[[param_name]]
     }
-    
-  } else {
-    stop("No valid params file provided via params$params_file")
   }
+  
 } else {
-  # Testing mode
-  report_params <- parse_params("/blue/cancercenter-dept/hkates/Tests/rnareport/output/report-with-NOISeq-test_params.txt")
+  # Interactive/testing mode - UPDATE PATH HERE
+  report_params <- parse_params("/blue/cancercenter-dept/PROJECTS/CLANTON/GE8593/resources/rnareport_params.txt")
 }
 ```
 
