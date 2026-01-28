@@ -225,7 +225,7 @@ if (exists("de_method") && !is.null(de_method)) {
 Description of Data Sheets:
 
 1. **Raw**: Raw gene count matrix before filtering or normalization.
-2. **Filtered**: Gene expression counts filtered to remove lowly-expressed and non-variable genes using the `NOISeq` method. **This dataset was used as input for DE analysis.**
+2. **Filtered**: Gene expression counts filtered to remove lowly-expressed and non-variable genes using the `r report_params$filter_method` method. **This dataset was used as input for DE analysis.**
 3. **CPM / CPM.batchcorrected**: Counts per million (CPM) normalized expression values, with gene symbols. If batch correction was applied (see methods), this sheet contains values back-transformed from the batch-corrected log-CPM matrix.
 4. **LCPM / LCPM.batchcorrected**: Log-transformed CPM values, either uncorrected or batch corrected (if correction was requested), useful for visualization.
 5. **Sample_Metadata**: Sample information including treatment, group, and library sizes.
