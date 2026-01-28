@@ -247,10 +247,25 @@ ui <- fluidPage(
             column(6, textInput("group_var", "Grouping Variable",
                                 value = "Condition",
                                 placeholder = "Column name in sample sheet")),
-            column(6, textInput("batch_var", "Batch Variable (optional)",
+            column(6, textInput("batch_var", "Batch/Pairing Variable (optional)",
                                 value = "",
-                                placeholder = "Leave empty if no batch correction"))
+                                placeholder = "Leave empty if no pairing/batch"))
           ),
+          
+          # NEW: Paired design checkbox
+          div(class = "info-box",
+              tags$i(class = "fa fa-link"),
+              " Check this box if batch_var represents PAIRED SAMPLES (e.g., subject ID for pre/post design). ",
+              "Leave unchecked for fixed-effect batch correction."
+          ),
+          fluidRow(
+            column(12,
+                   checkboxInput("paired_design", 
+                                 "Use paired design (duplicateCorrelation for limma-voom, fixed effect for DESeq2/edgeR)", 
+                                 value = FALSE)
+            )
+          ),
+          tags$br(),
           
           tags$br(),
           
@@ -612,6 +627,12 @@ server <- function(input, output, session) {
         updateTextInput(session, "batch_var", value = params$batch_var)
       }
       
+      # NEW: Load paired_design parameter
+      if ("paired_design" %in% names(params)) {
+        paired_val <- if (tolower(params$paired_design) == "true") TRUE else FALSE
+        updateCheckboxInput(session, "paired_design", value = paired_val)
+      }
+      
       # NEW: Load DE tool parameter
       if ("DE_tool" %in% names(params)) {
         updateSelectInput(session, "DE_tool", selected = params$DE_tool)
@@ -967,6 +988,13 @@ server <- function(input, output, session) {
     # Optional batch variable
     if (!is.null(input$batch_var) && input$batch_var != "") {
       lines <- c(lines, paste("--batch_var", shQuote(input$batch_var)))
+    }
+    
+    # NEW: Paired design parameter
+    if (!is.null(input$paired_design) && input$paired_design == TRUE) {
+      lines <- c(lines, "--paired_design TRUE")
+    } else {
+      lines <- c(lines, "--paired_design FALSE")
     }
     # NEW: DE tool parameter
     lines <- c(lines, paste("--DE_tool", shQuote(input$DE_tool)))
