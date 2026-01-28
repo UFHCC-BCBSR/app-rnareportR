@@ -243,30 +243,55 @@ run_rnaseq_analysis <- function(report_params) {
     v <- voom(DGE.filtered, design.mat, plot = TRUE)
     dev.off()
     
-    # Optional batch correction
+    # Optional batch handling
     if (!is.null(report_params$batch_var) && report_params$batch_var %in% colnames(sample.keys)) {
-      message("Batch correction: Running duplicateCorrelation and removeBatchEffect...")
       batch <- sample.keys[[report_params$batch_var]]
-      design <- model.matrix(~ 0 + sample.keys[[report_params$group_var]])
       
-      corfit <- duplicateCorrelation(v, design, block = batch)
-      corrected_matrix <- removeBatchEffect(
-        v$E,
-        batch = batch,
-        design = design,
-        correlation = corfit$consensus.correlation,
-        block = batch
-      )
+      # Check if this is paired design
+      paired_design <- if (!is.null(report_params$paired_design)) report_params$paired_design else FALSE
       
-      v$E_corrected <- corrected_matrix
-      DGE.filtered$E_corrected <- corrected_matrix
-      message("Batch correction complete.")
+      if (paired_design) {
+        message("Paired design: Running duplicateCorrelation for within-subject correlation...")
+        design <- model.matrix(~ 0 + sample.keys[[report_params$group_var]])
+        
+        # First duplicateCorrelation
+        corfit <- duplicateCorrelation(v, design, block = batch)
+        message(paste("Consensus correlation:", round(corfit$consensus.correlation, 3)))
+        
+        # Re-run voom with correlation
+        v <- voom(DGE.filtered, design.mat, plot = FALSE, block = batch, 
+                  correlation = corfit$consensus.correlation)
+        
+        # Store correlation info
+        v$correlation <- corfit$consensus.correlation
+        v$paired_design <- TRUE
+        
+        # NO removeBatchEffect for paired design
+        v$E_corrected <- v$E
+        DGE.filtered$E_corrected <- v$E
+        message(paste("Paired design complete. Correlation:", round(corfit$consensus.correlation, 3)))
+        
+      } else {
+        message("Batch correction: Running duplicateCorrelation and removeBatchEffect...")
+        design <- model.matrix(~ 0 + sample.keys[[report_params$group_var]])
+        corfit <- duplicateCorrelation(v, design, block = batch)
+        
+        corrected_matrix <- removeBatchEffect(
+          v$E,
+          batch = batch,
+          design = design,
+          correlation = corfit$consensus.correlation,
+          block = batch
+        )
+        v$E_corrected <- corrected_matrix
+        DGE.filtered$E_corrected <- corrected_matrix
+        message("Batch correction complete.")
+      }
     } else {
       message("No batch correction applied.")
       v$E_corrected <- v$E
       DGE.filtered$E_corrected <- v$E
     }
-    
     # Fit linear model
     if (!is.null(report_params$batch_var) && report_params$batch_var %in% colnames(sample.keys)) {
       vfit <- lmFit(v, design.mat, block = batch, correlation = corfit$consensus.correlation)
@@ -307,6 +332,14 @@ run_rnaseq_analysis <- function(report_params) {
     
     # ===== DESEQ2 OR EDGER GLM ANALYSIS =====
     
+    # ===== DESEQ2 OR EDGER GLM ANALYSIS =====
+    # Extract paired_design parameter (default to FALSE if not provided)
+    paired_design <- if (!is.null(report_params$paired_design)) {
+      report_params$paired_design
+    } else {
+      FALSE
+    }
+    
     # Run the appropriate DE method
     de_results <- run_differential_expression(
       method = report_params$DE_tool,
@@ -317,7 +350,8 @@ run_rnaseq_analysis <- function(report_params) {
       alpha = 0.05,
       lfc_threshold = 0,
       shrinkage = TRUE,
-      gene_annotations = gene_annotations
+      gene_annotations = gene_annotations,
+      paired_design = paired_design
     )
     
     # Check for errors
