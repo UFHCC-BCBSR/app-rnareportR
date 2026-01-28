@@ -713,7 +713,7 @@ generate_delta_plots <- function(efit_results_dfs, lcpm_matrix, dge_list_filt, t
         title = paste0("Per-subject changes (top ", top_n, " genes)\n",
                        gsub("efit_|_results_df","",names(efit_results_dfs)[i])),
         x = "Subject",
-        y = "Change in expression (post - pre, logCPM)"
+        y = "Log2 fold change (post vs pre)"  # Changed this line
       ) +
       theme_bw() +
       theme(
@@ -725,51 +725,133 @@ generate_delta_plots <- function(efit_results_dfs, lcpm_matrix, dge_list_filt, t
   return(delta_plot_list)
 }
 
-#' Generate trajectory plots showing pre->post for paired data
+#' Generate interactive trajectory plots with searchable dropdown
 #' @param efit_results_dfs List of efit results dataframes
 #' @param lcpm_matrix Log-CPM expression matrix
 #' @param dge_list_filt Filtered DGEList object with sample metadata
-#' @param top_n Number of top genes to plot (default 6)
-generate_trajectory_plots <- function(efit_results_dfs, lcpm_matrix, dge_list_filt, top_n = 6) {
+#' @param max_genes Maximum genes to include (default 100, supports type-to-filter)
+generate_trajectory_plots <- function(efit_results_dfs, lcpm_matrix, dge_list_filt, max_genes = 100) {
   
   trajectory_plot_list <- lapply(seq_along(efit_results_dfs), function(i) {
     
+    # Get more genes for better search capability
     top_genes <- efit_results_dfs[[i]] %>%
+      filter(!is.na(SYMBOL)) %>%
       arrange(P.value) %>%
-      head(top_n)
+      head(max_genes)
     
-    traj_data <- do.call(rbind, lapply(1:nrow(top_genes), function(g) {
+    all_traces <- list()
+    buttons <- list()
+    
+    for(g in 1:nrow(top_genes)) {
       gene_id <- top_genes$ensembleID[g]
-      gene_name <- if(!is.na(top_genes$SYMBOL[g])) top_genes$SYMBOL[g] else gene_id
-      logFC <- round(top_genes$logFC[g], 2)
-      p_val <- format(top_genes$P.value[g], digits = 3)
+      gene_name <- top_genes$SYMBOL[g]
       
       expr <- lcpm_matrix[gene_id, ]
+      subjects <- unique(dge_list_filt$samples$subject)
       
-      data.frame(
-        gene = paste0(gene_name, " (logFC=", logFC, ", p=", p_val, ")"),
-        expression = expr,
-        group = dge_list_filt$samples$group,
-        subject = dge_list_filt$samples$subject
+      traj_data <- do.call(rbind, lapply(subjects, function(subj) {
+        samples <- dge_list_filt$samples
+        pre_sample <- samples$SampleName[samples$subject == subj & samples$group == "pre"]
+        post_sample <- samples$SampleName[samples$subject == subj & samples$group == "post"]
+        
+        if (length(pre_sample) > 0 && length(post_sample) > 0) {
+          data.frame(
+            subject = subj,
+            timepoint = c("pre", "post"),
+            expression = c(expr[pre_sample], expr[post_sample]),
+            stringsAsFactors = FALSE
+          )
+        }
+      }))
+      
+      # Create traces for this gene (one per subject)
+      for(subj in subjects) {
+        subj_data <- traj_data[traj_data$subject == subj, ]
+        
+        trace <- list(
+          x = subj_data$timepoint,
+          y = subj_data$expression,
+          type = "scatter",
+          mode = "lines+markers",
+          name = paste("Subject", subj),
+          visible = (g == 1),  # Only first gene visible initially
+          line = list(width = 2),
+          marker = list(size = 8),
+          hovertemplate = paste0(
+            "Subject: ", subj, "<br>",
+            "Timepoint: %{x}<br>",
+            "Expression: %{y:.2f}<br>",
+            "<extra></extra>"
+          )
+        )
+        
+        all_traces[[length(all_traces) + 1]] <- trace
+      }
+      
+      # Create button for this gene
+      n_subjects <- length(subjects)
+      visible_vec <- rep(FALSE, length(subjects) * nrow(top_genes))
+      start_idx <- (g - 1) * n_subjects + 1
+      end_idx <- g * n_subjects
+      visible_vec[start_idx:end_idx] <- TRUE
+      
+      buttons[[g]] <- list(
+        method = "update",
+        args = list(
+          list(visible = visible_vec),
+          list(title = paste0(gene_name, " - Paired trajectories"))
+        ),
+        label = gene_name
       )
-    }))
+    }
     
-    ggplot(traj_data, aes(x = group, y = expression, group = subject, color = factor(subject))) +
-      geom_point(size = 2) +
-      geom_line(alpha = 0.6) +
-      facet_wrap(~ gene, scales = "free_y", ncol = 2) +
-      labs(
-        title = paste0("Individual trajectories (top ", top_n, " genes)\n",
-                       gsub("efit_|_results_df","",names(efit_results_dfs)[i])),
-        x = "Timepoint",
-        y = "Expression (logCPM)",
-        color = "Subject"
-      ) +
-      theme_bw() +
-      theme(
-        legend.position = "right",
-        strip.text = element_text(size = 8)
+    # Create plotly figure
+    fig <- plot_ly()
+    
+    # Add all traces
+    for(trace in all_traces) {
+      fig <- fig %>% add_trace(
+        x = trace$x,
+        y = trace$y,
+        type = trace$type,
+        mode = trace$mode,
+        name = trace$name,
+        visible = trace$visible,
+        line = trace$line,
+        marker = trace$marker,
+        hovertemplate = trace$hovertemplate
       )
+    }
+    
+    # Add dropdown menu
+    fig <- fig %>%
+      layout(
+        title = list(
+          text = paste0(top_genes$SYMBOL[1], " - Paired trajectories<br>",
+                        "<sub>", gsub("efit_|_results_df","",names(efit_results_dfs)[i]), 
+                        " (Type to search ", nrow(top_genes), " genes)</sub>"),
+          font = list(size = 16)
+        ),
+        xaxis = list(title = "Timepoint"),
+        yaxis = list(title = "Expression (log-CPM)"),
+        updatemenus = list(
+          list(
+            active = 0,
+            type = "dropdown",
+            direction = "down",
+            x = 0.01,
+            y = 1.15,
+            xanchor = "left",
+            yanchor = "top",
+            buttons = buttons
+          )
+        ),
+        showlegend = TRUE,
+        hovermode = "closest"
+      )
+    
+    return(fig)
   })
   
   return(trajectory_plot_list)
@@ -784,12 +866,19 @@ generate_subject_heatmaps <- function(efit_results_dfs, lcpm_matrix, dge_list_fi
   
   heatmap_list <- lapply(seq_along(efit_results_dfs), function(i) {
     
-    top_genes <- efit_results_dfs[[i]] %>%
+    # Get top genes with gene symbols
+    top_genes_df <- efit_results_dfs[[i]] %>%
+      filter(!is.na(SYMBOL)) %>%
       arrange(P.value) %>%
-      head(num_genes) %>%
-      pull(ensembleID)
+      head(num_genes)
+    
+    top_genes <- top_genes_df$ensembleID
+    gene_symbols <- top_genes_df$SYMBOL
     
     lcpm_top <- lcpm_matrix[top_genes, ]
+    
+    # Replace Ensemble IDs with gene symbols
+    rownames(lcpm_top) <- gene_symbols
     
     annotation_col <- data.frame(
       subject = factor(dge_list_filt$samples$subject),
