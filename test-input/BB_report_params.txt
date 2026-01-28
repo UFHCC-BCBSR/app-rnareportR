@@ -20,3 +20,4 @@
 --raw_seq_URL ""
 --multiqc_url ""
 --batch_var "Batch"
+--paired_design FALSE
