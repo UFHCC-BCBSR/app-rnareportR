@@ -663,6 +663,174 @@ generate_volcano_plot <- function(efit_results_df, contrast_name) {
   return(p)
 }
 
+#' Generate delta plots showing per-subject changes for paired data
+#' @param efit_results_dfs List of efit results dataframes
+#' @param lcpm_matrix Log-CPM expression matrix
+#' @param dge_list_filt Filtered DGEList object with sample metadata
+#' @param top_n Number of top genes to plot (default 10)
+generate_delta_plots <- function(efit_results_dfs, lcpm_matrix, dge_list_filt, top_n = 10) {
+  
+  delta_plot_list <- lapply(seq_along(efit_results_dfs), function(i) {
+    
+    top_genes <- efit_results_dfs[[i]] %>%
+      arrange(P.value) %>%
+      head(top_n)
+    
+    delta_data <- do.call(rbind, lapply(1:nrow(top_genes), function(g) {
+      gene_id <- top_genes$ensembleID[g]
+      gene_name <- if(!is.na(top_genes$SYMBOL[g])) top_genes$SYMBOL[g] else gene_id
+      
+      expr <- lcpm_matrix[gene_id, ]
+      subjects <- unique(dge_list_filt$samples$subject)
+      
+      deltas <- sapply(subjects, function(subj) {
+        samples <- dge_list_filt$samples
+        pre_sample <- samples$SampleName[samples$subject == subj & samples$group == "pre"]
+        post_sample <- samples$SampleName[samples$subject == subj & samples$group == "post"]
+        
+        if (length(pre_sample) > 0 && length(post_sample) > 0) {
+          expr[post_sample] - expr[pre_sample]
+        } else {
+          NA
+        }
+      })
+      
+      data.frame(
+        gene = paste0(gene_name),
+        subject = subjects,
+        delta = deltas
+      )
+    }))
+    
+    ggplot(delta_data, aes(x = factor(subject), y = delta)) +
+      geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
+      geom_point(size = 3, alpha = 0.7, color = "#3498db") +
+      geom_segment(aes(x = factor(subject), xend = factor(subject), 
+                       y = 0, yend = delta), 
+                   color = "#3498db", alpha = 0.5) +
+      facet_wrap(~ gene, scales = "free_y", ncol = 2) +
+      labs(
+        title = paste0("Per-subject changes (top ", top_n, " genes)\n",
+                       gsub("efit_|_results_df","",names(efit_results_dfs)[i])),
+        x = "Subject",
+        y = "Change in expression (post - pre, logCPM)"
+      ) +
+      theme_bw() +
+      theme(
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        strip.text = element_text(size = 8)
+      )
+  })
+  
+  return(delta_plot_list)
+}
+
+#' Generate trajectory plots showing pre->post for paired data
+#' @param efit_results_dfs List of efit results dataframes
+#' @param lcpm_matrix Log-CPM expression matrix
+#' @param dge_list_filt Filtered DGEList object with sample metadata
+#' @param top_n Number of top genes to plot (default 6)
+generate_trajectory_plots <- function(efit_results_dfs, lcpm_matrix, dge_list_filt, top_n = 6) {
+  
+  trajectory_plot_list <- lapply(seq_along(efit_results_dfs), function(i) {
+    
+    top_genes <- efit_results_dfs[[i]] %>%
+      arrange(P.value) %>%
+      head(top_n)
+    
+    traj_data <- do.call(rbind, lapply(1:nrow(top_genes), function(g) {
+      gene_id <- top_genes$ensembleID[g]
+      gene_name <- if(!is.na(top_genes$SYMBOL[g])) top_genes$SYMBOL[g] else gene_id
+      logFC <- round(top_genes$logFC[g], 2)
+      p_val <- format(top_genes$P.value[g], digits = 3)
+      
+      expr <- lcpm_matrix[gene_id, ]
+      
+      data.frame(
+        gene = paste0(gene_name, " (logFC=", logFC, ", p=", p_val, ")"),
+        expression = expr,
+        group = dge_list_filt$samples$group,
+        subject = dge_list_filt$samples$subject
+      )
+    }))
+    
+    ggplot(traj_data, aes(x = group, y = expression, group = subject, color = factor(subject))) +
+      geom_point(size = 2) +
+      geom_line(alpha = 0.6) +
+      facet_wrap(~ gene, scales = "free_y", ncol = 2) +
+      labs(
+        title = paste0("Individual trajectories (top ", top_n, " genes)\n",
+                       gsub("efit_|_results_df","",names(efit_results_dfs)[i])),
+        x = "Timepoint",
+        y = "Expression (logCPM)",
+        color = "Subject"
+      ) +
+      theme_bw() +
+      theme(
+        legend.position = "right",
+        strip.text = element_text(size = 8)
+      )
+  })
+  
+  return(trajectory_plot_list)
+}
+
+#' Generate subject-ordered heatmap for paired data
+#' @param efit_results_dfs List of efit results dataframes
+#' @param lcpm_matrix Log-CPM expression matrix
+#' @param dge_list_filt Filtered DGEList object with sample metadata
+#' @param num_genes Number of genes to show (default 50)
+generate_subject_heatmaps <- function(efit_results_dfs, lcpm_matrix, dge_list_filt, num_genes = 50) {
+  
+  heatmap_list <- lapply(seq_along(efit_results_dfs), function(i) {
+    
+    top_genes <- efit_results_dfs[[i]] %>%
+      arrange(P.value) %>%
+      head(num_genes) %>%
+      pull(ensembleID)
+    
+    lcpm_top <- lcpm_matrix[top_genes, ]
+    
+    annotation_col <- data.frame(
+      subject = factor(dge_list_filt$samples$subject),
+      group = factor(dge_list_filt$samples$group)
+    )
+    rownames(annotation_col) <- colnames(lcpm_top)
+    
+    sample_order <- order(annotation_col$subject, annotation_col$group)
+    
+    n_subjects <- length(unique(annotation_col$subject))
+    subject_colors <- setNames(
+      rainbow(n_subjects, s = 0.6, v = 0.8), 
+      levels(annotation_col$subject)
+    )
+    group_colors <- c("pre" = "#3498db", "post" = "#e74c3c")
+    
+    ann_colors <- list(
+      subject = subject_colors,
+      group = group_colors
+    )
+    
+    pheatmap(
+      lcpm_top[, sample_order],
+      scale = "row",
+      annotation_col = annotation_col[sample_order, ],
+      annotation_colors = ann_colors,
+      cluster_cols = FALSE,
+      cluster_rows = TRUE,
+      show_colnames = TRUE,
+      show_rownames = TRUE,
+      fontsize_row = 6,
+      fontsize_col = 8,
+      main = paste0("Top ", num_genes, " genes - grouped by subject\n", 
+                    gsub("efit_|_results_df","",names(efit_results_dfs)[i])),
+      color = colorRampPalette(c("blue", "white", "red"))(100)
+    )
+  })
+  
+  return(heatmap_list)
+}
+
 generate_heatmap <- function(efit_results_df, lcpm_matrix, dge_list_filt, title, num_genes = 50, fontsize_row = 12) {
   
   # Extract contrast name dynamically
