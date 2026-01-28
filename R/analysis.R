@@ -115,6 +115,8 @@ run_rnaseq_analysis <- function(report_params) {
   DGE$samples$SampleName <- file_df$SampleName
   
   # Step 8: Merge metadata (safe way that preserves order)
+  DGE$samples$group <- NULL
+  
   DGE$samples <- dplyr::left_join(DGE$samples, sample.keys, by = "SampleName")
   rownames(DGE$samples) <- DGE$samples$SampleName
   
@@ -227,7 +229,6 @@ run_rnaseq_analysis <- function(report_params) {
     stringsAsFactors = FALSE
   )
   rownames(gene_annotations) <- gene_annotations$gene_id
-  
   # NEW: Run DE analysis based on selected method
   if (report_params$DE_tool == "limma_voom") {
     
