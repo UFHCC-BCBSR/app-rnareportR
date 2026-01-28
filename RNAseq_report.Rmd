@@ -597,37 +597,85 @@ tagList(
 
 ## Differential Expression Results Visualizations
 
+```{r paired_viz_intro, results='asis', echo=FALSE}
+# Check if this is a paired design
+is_paired <- !is.null(report_params$paired_design) && report_params$paired_design == TRUE
+
+if (is_paired) {
+  cat("**Note:** This study uses a paired design. Visualizations include standard DE plots and paired-specific analyses showing individual subject changes.\n\n")
+}
+```
+
 ### Volcano Plots
 
 Visualization of **log-fold changes vs. statistical significance** for each contrast (plotly v4.1 (Sievert C 2020)) shows patterns of **significantly up/downregulated genes** ("significance" determined by adj. p value < 0.05 ***AND** abs(logFC) > 0.58).
 
 ```{r volcano_plots_all, echo=FALSE, results='asis', fig.width=9, fig.height=5}
-# Generate all volcano plots and store in a list
+if (is_paired) {
+  cat("*For paired data, large fold changes without significance may indicate consistent direction but high inter-subject variability.*\n\n")
+}
+
 volcano_plots <- lapply(seq_along(efit_results_dfs), function(i) {
   generate_volcano_plot(efit_results_dfs[[i]], paste0(gsub("efit_|_results_df","",names(efit_results_dfs)[i]), "\n")) %>%
     style(marker = list(size = 2))
 })
 
-# Render all plots
 tagList(volcano_plots)
 ```
 
 ### Heatmaps
 
-Heatmaps of the **top 50 DE genes** for each contrast show the scaled counts values for all samples in that contrast using heatmaply v1.5 (Galili et al. 2017). Hierarchical clustering of samples is based on expression patterns.
+```{r heatmap_intro,results='asis',echo=FALSE}
+if (is_paired) {
+  cat("#### Standard heatmap (clustered by expression similarity)\n\n")
+  cat("Heatmaps of the **top 50 genes by p-value** show scaled expression values. In paired studies, samples may cluster by subject rather than group, which is expected and correct.\n\n")
+} else {
+  cat("Heatmaps of the **top 50 DE genes** for each contrast show scaled counts values using heatmaply v1.5. Hierarchical clustering of samples is based on expression patterns.\n\n")
+}
+```
 
-```{r heatmaps of top DE genes,fig.width=9, fig.height=9}
+```{r heatmaps_standard,fig.width=9, fig.height=9}
 heatmap_list <- lapply(seq_along(efit_results_dfs), function(i) {
   generate_heatmap(
     efit_results_df = efit_results_dfs[[i]],  
     lcpm_matrix = lcpm_matrix,  
     dge_list_filt = dge_list_filt,  
-    title = paste("Scaled Gene Expression (Z-scores of logCPM) of Top 50 DE Genes\n", gsub("efit_|_results_df","",names(efit_results_dfs)[i])),  
+    title = paste("Scaled Gene Expression (Z-scores of logCPM) of Top 50 Genes\n", gsub("efit_|_results_df","",names(efit_results_dfs)[i])),  
     num_genes = 50,  
     fontsize_row = 9
   )
 })
 tagList(heatmap_list)
+```
+
+```{r subject_heatmaps,eval=is_paired,results='asis',fig.width=10, fig.height=16}
+cat("#### Subject-ordered heatmap (paired design)\n\n")
+cat("Samples are ordered by subject with pre/post pairs side-by-side (not clustered). This validates the paired study design.\n\n")
+heatmap_subject_list <- generate_subject_heatmaps(efit_results_dfs, lcpm_matrix, dge_list_filt, num_genes = 50)
+
+# Print each heatmap individually
+for(i in seq_along(heatmap_subject_list)) {
+  print(heatmap_subject_list[[i]])
+}
+```
+
+```{r delta_plots,eval=is_paired,results='asis',fig.width=10, fig.height=8}
+cat("### Delta plots - individual subject changes\n\n")
+cat("Each point shows the change (post - pre) for one subject. Consistent direction across subjects indicates a reproducible effect, even if not statistically significant with current sample size.\n\n")
+delta_plot_list <- generate_delta_plots(efit_results_dfs, lcpm_matrix, dge_list_filt, top_n = 10)
+
+# Print each plot individually
+for(i in seq_along(delta_plot_list)) {
+  print(delta_plot_list[[i]])
+  cat("\n\n")  # Add spacing between plots
+}
+```
+
+```{r trajectory_plots,eval=is_paired,results='asis',fig.width=10, fig.height=8}
+cat("### Trajectory plots - pre to post changes\n\n")
+cat("Lines connect paired measurements from the same subject. Use the dropdown menu to select different genes (type to search). Parallel lines indicate consistent changes; crossing lines indicate subject-specific responses.\n\n")
+trajectory_plot_list <- generate_trajectory_plots(efit_results_dfs, lcpm_matrix, dge_list_filt, max_genes = 100)
+tagList(trajectory_plot_list)
 ```
 
 # Pathway Enrichment Analysis
