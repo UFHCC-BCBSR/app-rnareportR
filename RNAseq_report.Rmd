@@ -191,21 +191,41 @@ if (exists("report_params") && !is.null(report_params$filter_method)) {
 
 # Set method description based on actual DE tool used
 if (exists("de_method") && !is.null(de_method)) {
+  
+  # Check if paired design was used
+  paired_text <- ""
+  if (!is.null(report_params$paired_design) && report_params$paired_design == TRUE && 
+      !is.null(report_params$batch_var)) {
+    if (de_method == "limma_voom") {
+      paired_text <- sprintf(" To account for the paired study design, the duplicateCorrelation function was used with '%s' as a blocking factor, modeling within-subject correlation as a random effect.", 
+                            report_params$batch_var)
+    } else {
+      paired_text <- sprintf(" To account for the paired study design, '%s' was included in the design matrix as a fixed effect blocking factor.", 
+                            report_params$batch_var)
+    }
+  }
+  
   method_text <- switch(de_method,
     "deseq2" = paste0(
       "Differential expression analysis was performed using DESeq2 (Love et al. 2014). ",
       filter_text,
-      " DESeq2's negative binomial generalized linear model was used to model count data, estimate gene-wise dispersion parameters, and perform differential expression testing. Log-fold changes were shrunk using apeglm to provide more accurate effect size estimates by reducing noise in low-count genes."
+      " DESeq2's negative binomial generalized linear model was used to model count data, estimate gene-wise dispersion parameters, and perform differential expression testing.",
+      paired_text,
+      " Log-fold changes were shrunk using apeglm to provide more accurate effect size estimates by reducing noise in low-count genes."
     ),
     "edger_GLM" = paste0(
       "Differential expression analysis was performed using edgeR GLM quasi-likelihood pipeline (Robinson et al. 2010, Chen et al. 2016). ",
       filter_text,
-      " TMM normalization was applied to calculate normalization factors, followed by estimation of gene-wise negative binomial dispersions using the Cox-Reid profile-adjusted likelihood method. Differential expression was assessed using quasi-likelihood F-tests, which provide more robust error rate control than likelihood ratio tests."
+      " TMM normalization was applied to calculate normalization factors, followed by estimation of gene-wise negative binomial dispersions using the Cox-Reid profile-adjusted likelihood method.",
+      paired_text,
+      " Differential expression was assessed using quasi-likelihood F-tests, which provide more robust error rate control than likelihood ratio tests."
     ),
     "limma_voom" = paste0(
       "Differential expression analysis was performed using the limma-voom pipeline (Law et al. 2014, Ritchie et al. 2015). ",
       filter_text,
-      " TMM normalization factors were calculated to account for differences in library sizes and RNA composition between samples. The voom function transformed count data to log2-counts-per-million (logCPM) and estimated the mean-variance relationship to calculate precision weights for each observation. These weights account for the mean-variance trend in RNA-seq data (heteroscedasticity). A linear model was fitted to the weighted transformed data, and contrasts were computed for pairwise comparisons. Moderated t-statistics were calculated using empirical Bayes methods, which borrow information across genes to shrink gene-wise variance estimates toward a common value, improving statistical power especially for small sample sizes."
+      " TMM normalization factors were calculated to account for differences in library sizes and RNA composition between samples. The voom function transformed count data to log2-counts-per-million (logCPM) and estimated the mean-variance relationship to calculate precision weights for each observation. These weights account for the mean-variance trend in RNA-seq data (heteroscedasticity).",
+      paired_text,
+      " A linear model was fitted to the weighted transformed data, and contrasts were computed for pairwise comparisons. Moderated t-statistics were calculated using empirical Bayes methods, which borrow information across genes to shrink gene-wise variance estimates toward a common value, improving statistical power especially for small sample sizes."
     ),
     paste0(
       "Differential expression analysis was performed using standard methods for RNA-seq data. ",
