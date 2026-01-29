@@ -321,22 +321,37 @@ generate_kegg_enrichment_plot <- function(gene_lists, de_results_df, universe_en
   de_results_df <- de_results_df %>%
     mutate(ENTREZID = mapIds(annotation_obj, keys = ensembleID, column = "ENTREZID", keytype = "ENSEMBL", multiVals = "first"))
   
-  # Run KEGG enrichment using compareCluster()
-  kegg_res <- compareCluster(
-    Entrez ~ Contrast,
-    data = bind_rows(lapply(contrast_order, function(contrast) {
-      data.frame(
-        Entrez = gene_lists[[contrast]],
-        Contrast = contrast
-      )
-    })),
-    fun = "enrichKEGG",
-    universe = na.omit(universe_entrez),
-    organism = report_params$organism,
-    keyType = "kegg",
-    pvalueCutoff = pvalue_cutoff
-  )
-  
+# Run KEGG enrichment using compareCluster()
+kegg_res <- compareCluster(
+  Entrez ~ Contrast,
+  data = bind_rows(lapply(contrast_order, function(contrast) {
+    data.frame(
+      Entrez = gene_lists[[contrast]],
+      Contrast = contrast
+    )
+  })),
+  fun = "enrichKEGG",
+  universe = na.omit(universe_entrez),
+  organism = report_params$organism,
+  keyType = "kegg",
+  pvalueCutoff = pvalue_cutoff
+)
+
+# **ADD THIS CHECK**
+if (is.null(kegg_res) || nrow(kegg_res@compareClusterResult) == 0) {
+  message("No significant KEGG pathways found.")
+  return(list(
+    interactive_plot = NULL, 
+    static_plot = NULL, 
+    kegg_results = data.frame()
+  ))
+}
+
+# Ensure clusters are ordered correctly
+kegg_res@compareClusterResult$Cluster <- factor(
+  kegg_res@compareClusterResult$Cluster,
+  levels = contrast_order
+)  
   # Ensure clusters are ordered correctly
   kegg_res@compareClusterResult$Cluster <- factor(
     kegg_res@compareClusterResult$Cluster,
