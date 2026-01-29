@@ -837,16 +837,21 @@ kegg_results <- generate_kegg_enrichment_plot(
 
 Gene lists are significantly DE genes per contrast
 
-```{r kegg plot,fig.width=12, fig.height=10}
-download_button_png(kegg_results$static_plot, "kegg_enrichment_plot",height=12)
+```{r kegg plot, fig.width=12, fig.height=10, eval=!is.null(kegg_results$interactive_plot)}
+download_button_png(kegg_results$static_plot, "kegg_enrichment_plot", height=12)
 kegg_results$interactive_plot
+```
 
+```{r no kegg, eval=is.null(kegg_results$interactive_plot), results='asis'}
+cat("No significant KEGG pathways were found for the given significance threshold.\n")
+```
 
-kegg_results$kegg_results %>%  downloadthis::download_this(
+```{r kegg download}
+kegg_results$kegg_results %>% downloadthis::download_this(
   output_name = "KEGG_results",
   output_extension = ".xlsx",
   button_label = "Download KEGG enrichment results for all contrasts",
-button_type = "primary",
+  button_type = "primary",
   has_icon = TRUE,
   icon = "fa fa-save"
 )
