@@ -748,6 +748,17 @@ generate_trajectory_plots <- function(efit_results_dfs, lcpm_matrix, dge_list_fi
   
   trajectory_plot_list <- lapply(seq_along(efit_results_dfs), function(i) {
     
+    # Extract contrast name and groups dynamically
+    contrast_name <- unique(efit_results_dfs[[i]]$contrast)[1]
+    contrast_groups <- unlist(strsplit(contrast_name, " - "))
+    contrast_groups <- gsub("`", "", contrast_groups)
+    contrast_groups <- gsub("^X(?=\\d)", "", contrast_groups, perl = TRUE)
+    
+    # Reference group is on the right side of " - " (index 2), comparison is on left (index 1)
+    ref_group <- contrast_groups[2]  # Left side of plot
+    comp_group <- contrast_groups[1]  # Right side of plot
+    timepoint_order <- c(ref_group, comp_group)
+    
     # Get more genes for better search capability
     top_genes <- efit_results_dfs[[i]] %>%
       filter(!is.na(SYMBOL)) %>%
@@ -766,14 +777,14 @@ generate_trajectory_plots <- function(efit_results_dfs, lcpm_matrix, dge_list_fi
       
       traj_data <- do.call(rbind, lapply(subjects, function(subj) {
         samples <- dge_list_filt$samples
-        pre_sample <- samples$SampleName[samples$subject == subj & samples$group == "pre"]
-        post_sample <- samples$SampleName[samples$subject == subj & samples$group == "post"]
+        ref_sample <- samples$SampleName[samples$subject == subj & samples[[report_params$group_var]] == ref_group]
+        comp_sample <- samples$SampleName[samples$subject == subj & samples[[report_params$group_var]] == comp_group]
         
-        if (length(pre_sample) > 0 && length(post_sample) > 0) {
+        if (length(ref_sample) > 0 && length(comp_sample) > 0) {
           data.frame(
             subject = subj,
-            timepoint = c("pre", "post"),
-            expression = c(expr[pre_sample], expr[post_sample]),
+            timepoint = factor(c(ref_group, comp_group), levels = timepoint_order),
+            expression = c(expr[ref_sample], expr[comp_sample]),
             stringsAsFactors = FALSE
           )
         }
@@ -783,24 +794,26 @@ generate_trajectory_plots <- function(efit_results_dfs, lcpm_matrix, dge_list_fi
       for(subj in subjects) {
         subj_data <- traj_data[traj_data$subject == subj, ]
         
-        trace <- list(
-          x = subj_data$timepoint,
-          y = subj_data$expression,
-          type = "scatter",
-          mode = "lines+markers",
-          name = paste("Subject", subj),
-          visible = (g == 1),  # Only first gene visible initially
-          line = list(width = 2),
-          marker = list(size = 8),
-          hovertemplate = paste0(
-            "Subject: ", subj, "<br>",
-            "Timepoint: %{x}<br>",
-            "Expression: %{y:.2f}<br>",
-            "<extra></extra>"
+        if(nrow(subj_data) > 0) {
+          trace <- list(
+            x = as.character(subj_data$timepoint),
+            y = subj_data$expression,
+            type = "scatter",
+            mode = "lines+markers",
+            name = paste("Subject", subj),
+            visible = (g == 1),  # Only first gene visible initially
+            line = list(width = 2),
+            marker = list(size = 8),
+            hovertemplate = paste0(
+              "Subject: ", subj, "<br>",
+              "Timepoint: %{x}<br>",
+              "Expression: %{y:.2f}<br>",
+              "<extra></extra>"
+            )
           )
-        )
-        
-        all_traces[[length(all_traces) + 1]] <- trace
+          
+          all_traces[[length(all_traces) + 1]] <- trace
+        }
       }
       
       # Create button for this gene
@@ -847,7 +860,11 @@ generate_trajectory_plots <- function(efit_results_dfs, lcpm_matrix, dge_list_fi
                         " (Type to search ", nrow(top_genes), " genes)</sub>"),
           font = list(size = 16)
         ),
-        xaxis = list(title = "Timepoint"),
+        xaxis = list(
+          title = "Timepoint",
+          categoryorder = "array",
+          categoryarray = timepoint_order
+        ),
         yaxis = list(title = "Expression (log-CPM)"),
         updatemenus = list(
           list(
