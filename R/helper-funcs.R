@@ -337,7 +337,6 @@ kegg_res <- compareCluster(
   pvalueCutoff = pvalue_cutoff
 )
 
-# **ADD THIS CHECK**
 if (is.null(kegg_res) || nrow(kegg_res@compareClusterResult) == 0) {
   message("No significant KEGG pathways found.")
   return(list(
