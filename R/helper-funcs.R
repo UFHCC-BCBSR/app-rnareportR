@@ -686,6 +686,16 @@ generate_delta_plots <- function(efit_results_dfs, lcpm_matrix, dge_list_filt, t
   
   delta_plot_list <- lapply(seq_along(efit_results_dfs), function(i) {
     
+    # Extract contrast name and groups dynamically
+    contrast_name <- unique(efit_results_dfs[[i]]$contrast)[1]
+    contrast_groups <- unlist(strsplit(contrast_name, " - "))
+    contrast_groups <- gsub("`", "", contrast_groups)
+    contrast_groups <- gsub("^X(?=\\d)", "", contrast_groups, perl = TRUE)
+    
+    # Reference group is on the right side of " - " (index 2), comparison is on left (index 1)
+    ref_group <- contrast_groups[2]
+    comp_group <- contrast_groups[1]
+    
     top_genes <- efit_results_dfs[[i]] %>%
       arrange(P.value) %>%
       head(top_n)
@@ -699,11 +709,11 @@ generate_delta_plots <- function(efit_results_dfs, lcpm_matrix, dge_list_filt, t
       
       deltas <- sapply(subjects, function(subj) {
         samples <- dge_list_filt$samples
-        pre_sample <- samples$SampleName[samples$subject == subj & samples$group == "pre"]
-        post_sample <- samples$SampleName[samples$subject == subj & samples$group == "post"]
+        ref_sample <- samples$SampleName[samples$subject == subj & samples[[report_params$group_var]] == ref_group]
+        comp_sample <- samples$SampleName[samples$subject == subj & samples[[report_params$group_var]] == comp_group]
         
-        if (length(pre_sample) > 0 && length(post_sample) > 0) {
-          expr[post_sample] - expr[pre_sample]
+        if (length(ref_sample) > 0 && length(comp_sample) > 0) {
+          expr[comp_sample] - expr[ref_sample]
         } else {
           NA
         }
@@ -727,7 +737,7 @@ generate_delta_plots <- function(efit_results_dfs, lcpm_matrix, dge_list_filt, t
         title = paste0("Per-subject changes (top ", top_n, " genes)\n",
                        gsub("efit_|_results_df","",names(efit_results_dfs)[i])),
         x = "Subject",
-        y = "Log2 fold change (post vs pre)"  # Changed this line
+        y = paste0("Log2 fold change (", comp_group, " vs ", ref_group, ")")
       ) +
       theme_bw() +
       theme(
