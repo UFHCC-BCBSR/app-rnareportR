@@ -1325,13 +1325,16 @@ plot_pca <- function(dge, title = "", grp_var = report_params$group_var, show_le
       )
       
       fig <- fig %>%
-        add_polygons(
+        add_trace(
           x = ellipse_coords[, 1], 
           y = ellipse_coords[, 2],
-          line = list(color = grp_color, dash = "dot"),
-          fillcolor = grp_color, 
+          type = "scatter",
+          mode = "lines",
+          fill = "toself",
+          fillcolor = grp_color,
           opacity = 0.3,
-          showlegend = FALSE, 
+          line = list(color = grp_color, dash = "dot", width = 1),
+          showlegend = FALSE,
           hoverinfo = "skip",
           name = paste0(grp, "_ellipse")
         )
