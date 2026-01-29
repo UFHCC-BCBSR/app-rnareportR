@@ -907,6 +907,17 @@ generate_subject_heatmaps <- function(efit_results_dfs, lcpm_matrix, dge_list_fi
   
   heatmap_list <- lapply(seq_along(efit_results_dfs), function(i) {
     
+    # Extract contrast name and groups dynamically
+    contrast_name <- unique(efit_results_dfs[[i]]$contrast)[1]
+    contrast_groups <- unlist(strsplit(contrast_name, " - "))
+    contrast_groups <- gsub("`", "", contrast_groups)
+    contrast_groups <- gsub("^X(?=\\d)", "", contrast_groups, perl = TRUE)
+    
+    # Reference group is on the right side of " - " (index 2), comparison is on left (index 1)
+    ref_group <- contrast_groups[2]
+    comp_group <- contrast_groups[1]
+    group_order <- c(ref_group, comp_group)
+    
     # Get top genes with gene symbols
     top_genes_df <- efit_results_dfs[[i]] %>%
       filter(!is.na(SYMBOL)) %>%
@@ -921,11 +932,21 @@ generate_subject_heatmaps <- function(efit_results_dfs, lcpm_matrix, dge_list_fi
     # Replace Ensemble IDs with gene symbols
     rownames(lcpm_top) <- gene_symbols
     
+    # Filter samples to only those in the contrast groups
+    samples_in_contrast <- dge_list_filt$samples %>%
+      filter(!!sym(report_params$group_var) %in% contrast_groups)
+    
+    # Subset lcpm matrix to only samples in contrast
+    lcpm_top <- lcpm_top[, colnames(lcpm_top) %in% samples_in_contrast$SampleName]
+    
     annotation_col <- data.frame(
-      subject = factor(dge_list_filt$samples$subject),
-      group = factor(dge_list_filt$samples$group)
+      subject = factor(samples_in_contrast$subject),
+      group = factor(samples_in_contrast[[report_params$group_var]], levels = group_order)
     )
-    rownames(annotation_col) <- colnames(lcpm_top)
+    rownames(annotation_col) <- samples_in_contrast$SampleName
+    
+    # Ensure lcpm_top columns match annotation_col rows
+    lcpm_top <- lcpm_top[, rownames(annotation_col)]
     
     sample_order <- order(annotation_col$subject, annotation_col$group)
     
@@ -934,7 +955,12 @@ generate_subject_heatmaps <- function(efit_results_dfs, lcpm_matrix, dge_list_fi
       rainbow(n_subjects, s = 0.6, v = 0.8), 
       levels(annotation_col$subject)
     )
-    group_colors <- c("pre" = "#3498db", "post" = "#e74c3c")
+    
+    # Dynamic group colors
+    group_colors <- setNames(
+      c("#3498db", "#e74c3c"),
+      group_order
+    )
     
     ann_colors <- list(
       subject = subject_colors,
