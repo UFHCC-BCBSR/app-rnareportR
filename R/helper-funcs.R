@@ -1310,52 +1310,56 @@ plot_pca <- function(dge, title = "", grp_var = report_params$group_var, show_le
   # Initialize plotly figure
   fig <- plot_ly()
   
-  # Add ellipses and points for each group
-  for (grp in groups) {
-    grp_data <- plot_data[plot_data$Group == grp, ]
-    grp_color <- colors[as.character(grp)]
+# Add ellipses for ALL groups first (bottom layer)
+for (grp in groups) {
+  grp_data <- plot_data[plot_data$Group == grp, ]
+  grp_color <- colors[as.character(grp)]
+  
+  # Add ellipse (only if >2 points)
+  if (nrow(grp_data) > 2) {
+    ellipse_coords <- car::dataEllipse(
+      grp_data$PC1, grp_data$PC2,
+      levels = 0.68, 
+      plot.points = FALSE, 
+      draw = FALSE
+    )
     
-    # Add ellipse (only if >2 points)
-    if (nrow(grp_data) > 2) {
-      ellipse_coords <- car::dataEllipse(
-        grp_data$PC1, grp_data$PC2,
-        levels = 0.68, 
-        plot.points = FALSE, 
-        draw = FALSE
-      )
-      
-      fig <- fig %>%
-        add_trace(
-          x = ellipse_coords[, 1], 
-          y = ellipse_coords[, 2],
-          type = "scatter",
-          mode = "lines",
-          fill = "toself",
-          fillcolor = grp_color,
-          opacity = 0.3,
-          line = list(color = grp_color, dash = "dot", width = 1),
-          showlegend = FALSE,
-          hoverinfo = "skip",
-          name = paste0(grp, "_ellipse")
-        )
-    }
-    
-    # Add points
     fig <- fig %>%
       add_trace(
-        data = grp_data,
-        x = ~PC1, 
-        y = ~PC2,
-        type = "scatter", 
-        mode = "markers",
-        name = as.character(grp),
-        marker = list(color = grp_color, size = 10),
-        text = ~SampleID,
-        hoverinfo = "text",
-        showlegend = show_legend
+        x = ellipse_coords[, 1], 
+        y = ellipse_coords[, 2],
+        type = "scatter",
+        mode = "lines",
+        fill = "toself",
+        fillcolor = grp_color,
+        opacity = 0.3,
+        line = list(color = grp_color, dash = "dot", width = 1),
+        showlegend = FALSE,
+        hoverinfo = "skip",
+        name = paste0(grp, "_ellipse")
       )
   }
+}
+
+# Add points for ALL groups second (top layer)
+for (grp in groups) {
+  grp_data <- plot_data[plot_data$Group == grp, ]
+  grp_color <- colors[as.character(grp)]
   
+  fig <- fig %>%
+    add_trace(
+      data = grp_data,
+      x = ~PC1, 
+      y = ~PC2,
+      type = "scatter", 
+      mode = "markers",
+      name = as.character(grp),
+      marker = list(color = grp_color, size = 10),
+      text = ~SampleID,
+      hoverinfo = "text",
+      showlegend = show_legend
+    )
+}  
   # Add layout with variance %
   fig <- fig %>% layout(
     title = title,
